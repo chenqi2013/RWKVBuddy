@@ -1,0 +1,16 @@
+#!/bin/bash
+set -euo pipefail
+
+real_lipo="$(/usr/bin/xcrun --find lipo)"
+
+# Xcode 27.2's lipo rejects multiple architectures after -verify_arch.
+# Flutter 3.41 passes them together; verify each one and preserve failures.
+if [[ $# -ge 4 && "$2" == "-verify_arch" ]]; then
+  framework_binary="$1"
+  shift 2
+  for architecture in "$@"; do
+    "$real_lipo" "$framework_binary" -verify_arch "$architecture"
+  done
+else
+  exec "$real_lipo" "$@"
+fi
