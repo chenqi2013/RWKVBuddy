@@ -1,6 +1,6 @@
 import readline from 'node:readline';
 import { mkdirSync, existsSync, readdirSync, readFileSync, copyFileSync, writeFileSync } from 'node:fs';
-import { join, resolve, dirname } from 'node:path';
+import { join, resolve, dirname, extname, relative, sep, isAbsolute } from 'node:path';
 import { homedir } from 'node:os';
 import { AgentRun } from './src/engine.mjs';
 import { serviceRoot } from './src/runtime.mjs';
@@ -9,7 +9,9 @@ import { Provider } from './src/provider.mjs';
 import { Pool } from './src/runtime.mjs';
 import { defaultConnection } from './src/defaults.mjs';
 
-const dataRoot = process.env.RWKVBUDDY_DATA_DIR || join(process.env.APPDATA || join(homedir(), '.local', 'share'), 'RWKVBuddy', 'runs');
+const legacyMacRoot = join(homedir(), '.local', 'share', 'RWKVBuddy', 'runs');
+const dataRoot = process.env.RWKVBUDDY_DATA_DIR || (process.platform === 'darwin' && existsSync(legacyMacRoot) ? legacyMacRoot :
+  join(process.env.APPDATA || join(homedir(), ...(process.platform === 'darwin' ? ['Library', 'Application Support'] : ['.local', 'share'])), 'RWKVBuddy', 'runs'));
 mkdirSync(dataRoot, { recursive: true });
 let active;
 let activePromise;
@@ -45,7 +47,7 @@ function processCommand(command) {
         while (parent && turns.length < 20) {
           try {
             const previous = savedRun(parent);
-            turns.unshift({ id: previous.id, question: previous.question, answer: previous.answer, report: previous.report, status: previous.status });
+            turns.unshift({ id: previous.id, question: previous.question, answer: previous.answer, report: previous.report, status: previous.status, deliverables: previous.deliverables || [], traces: previous.traces || [], events: previous.events || [] });
             parent = previous.parentRunId;
           } catch { break; }
         }
@@ -88,7 +90,8 @@ function processCommand(command) {
           command.context.turns = turns;
           command.conversationId = parent.conversationId || parent.id;
           if (command.reuseInputs) {
-            const previousSnapshot = join(dataRoot, parent.id, 'inputs.snapshot.json');
+            const outputSnapshot = join(dataRoot, parent.id, 'outputs.snapshot.json');
+            const previousSnapshot = existsSync(outputSnapshot) ? outputSnapshot : join(dataRoot, parent.id, 'inputs.snapshot.json');
             if (!existsSync(previousSnapshot)) throw new Error('该历史任务缺少可复用资料，请重新添加文件');
             command.reuseSnapshot = previousSnapshot;
             command.sourceMode = parent.sourceMode || 'directory';
@@ -110,6 +113,22 @@ function processCommand(command) {
         break;
       }
       case 'cancel': if (active && (!command.runId || command.runId === active.id)) active.cancel(); break;
+      case 'export.file': {
+        const run = savedRun(command.runId);
+        const file = run.deliverables?.find((item) => item.id === command.fileId);
+        if (!file) throw new Error('找不到该成果文件');
+        const source = join(dataRoot, run.id, 'outputs', file.name);
+        const target = resolve(command.path || '');
+        if (extname(target).toLowerCase() !== extname(file.name).toLowerCase()) throw new Error('保存格式必须与成果文件一致');
+        const inside = relative(resolve(dataRoot), target);
+        if (inside === '' || (!isAbsolute(inside) && inside !== '..' && !inside.startsWith(`..${sep}`))) {
+          throw new Error('请将文件保存到任务数据目录之外');
+        }
+        mkdirSync(dirname(target), { recursive: true });
+        copyFileSync(source, target);
+        send({ type: 'file.exported', payload: { path: target } });
+        break;
+      }
       case 'export.trace': {
         const run = savedRun(command.runId);
         const target = resolve(command.path || '');

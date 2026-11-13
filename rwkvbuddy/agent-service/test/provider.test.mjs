@@ -63,3 +63,14 @@ test('cancelling an active HTTP stream rejects and releases model slot', async (
   await assert.rejects(pending, { name: 'AbortError' });
   assert.equal(pool.active, 0);
 });
+
+test('token-truncated streamed responses are reported separately from malformed JSON', async (t) => {
+  const baseUrl = await server(t, async (request, response) => {
+    await body(request);
+    response.writeHead(200, { 'Content-Type': 'text/event-stream' });
+    response.write(`data: ${JSON.stringify({ choices: [{ delta: { content: '{"answer":"未完成' } }] })}\n\n`);
+    response.end(`data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: 'length' }] })}\n\ndata: [DONE]\n\n`);
+  });
+  const provider = new Provider({ baseUrl, protocol: 'chat', model: 'test-model' }, new Pool(1));
+  await assert.rejects(provider.generate('分析', {}, new AbortController().signal), (error) => error.code === 'MODEL_OUTPUT_TRUNCATED' && /截断/.test(error.message));
+});

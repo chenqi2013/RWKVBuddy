@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:io';
 import 'dart:ui' show AppExitResponse;
 import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
@@ -22,7 +21,7 @@ class MyApp extends StatelessWidget {
   final AgentController? controller;
   @override
   Widget build(BuildContext context) => MaterialApp(
-    title: 'RWKVBuddy · 专家协作',
+    title: 'RWKVBuddy · 文件助手',
     debugShowCheckedModeBanner: false,
     theme: ThemeData(
       useMaterial3: true,
@@ -65,7 +64,6 @@ class _WorkspacePageState extends State<WorkspacePage>
   final prompt = TextEditingController();
   final contentScroll = ScrollController(keepScrollOffset: false);
   String _lastRunId = '';
-  String _lastTab = '';
   bool _scrollQueued = false;
   bool _exiting = false;
   @override
@@ -96,10 +94,9 @@ class _WorkspacePageState extends State<WorkspacePage>
   }
 
   void _followConversation() {
-    final changed = agent.runId != _lastRunId || agent.tab != _lastTab;
+    final changed = agent.runId != _lastRunId;
     _lastRunId = agent.runId;
-    _lastTab = agent.tab;
-    if (agent.tab != 'chat' || _scrollQueued) return;
+    if (_scrollQueued) return;
     if (!changed &&
         contentScroll.hasClients &&
         contentScroll.position.maxScrollExtent - contentScroll.offset > 100) {
@@ -108,7 +105,7 @@ class _WorkspacePageState extends State<WorkspacePage>
     _scrollQueued = true;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _scrollQueued = false;
-      if (mounted && agent.tab == 'chat' && contentScroll.hasClients) {
+      if (mounted && contentScroll.hasClients) {
         contentScroll.jumpTo(contentScroll.position.maxScrollExtent);
       }
     });
@@ -166,6 +163,24 @@ class _WorkspacePageState extends State<WorkspacePage>
       agent.send({
         'type': 'export',
         'runId': agent.runId,
+        'path': location.path,
+      });
+    }
+  }
+
+  Future<void> exportFile(Json file, String runId) async {
+    final name = file['name'] as String;
+    final location = await getSaveLocation(
+      suggestedName: name,
+      acceptedTypeGroups: [
+        XTypeGroup(label: '成果文件', extensions: [name.split('.').last]),
+      ],
+    );
+    if (location != null) {
+      agent.send({
+        'type': 'export.file',
+        'runId': runId,
+        'fileId': file['id'],
         'path': location.path,
       });
     }
@@ -250,7 +265,7 @@ class _WorkspacePageState extends State<WorkspacePage>
         const Padding(
           padding: EdgeInsets.only(left: 38, top: 3),
           child: Text(
-            '你的专家协作空间',
+            '你的文件处理助手',
             style: TextStyle(color: Color(0xFFA7ADC5), fontSize: 11),
           ),
         ),
@@ -376,7 +391,7 @@ class _WorkspacePageState extends State<WorkspacePage>
         ],
         const Expanded(
           child: Text(
-            '专家协作台',
+            '文件助手',
             style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
           ),
         ),
@@ -465,7 +480,7 @@ class _WorkspacePageState extends State<WorkspacePage>
       ),
       const SizedBox(height: 14),
       const Text(
-        '直接提问，或添加文档、表格和项目资料。\n专家并行分析、交叉复核，你可以随时展开每一步的输入和结果。',
+        '直接提问，或添加文档、表格和项目资料。\n展示读取、分析和工具调用过程，直接查看回答和生成文件。',
         style: TextStyle(color: muted, fontSize: 13, height: 1.9),
       ),
       const SizedBox(height: 29),
@@ -484,7 +499,7 @@ class _WorkspacePageState extends State<WorkspacePage>
       const SizedBox(height: 20),
       Text(
         agent.mode == 'local'
-            ? '当前使用本地规则与真实工具，无需模型凭据。切换到远端模型 可由模型分别担任各专家。'
+            ? '当前使用本地规则与真实工具，无需模型凭据。切换到远端模型可按要求分析、修改并生成文件。'
             : '当前使用真实远端模型会话。请确认服务地址、协议和访问凭据后发起任务。',
         style: const TextStyle(color: muted, fontSize: 11, height: 1.7),
       ),
@@ -626,6 +641,31 @@ class _WorkspacePageState extends State<WorkspacePage>
               ),
             ),
           ),
+        Padding(
+          padding: const EdgeInsets.only(bottom: 6),
+          child: Wrap(
+            spacing: 10,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              FilterChip(
+                key: const Key('generate-files'),
+                label: const Text('生成文件', style: TextStyle(fontSize: 11)),
+                avatar: const Icon(Icons.note_add_outlined, size: 16),
+                selected: agent.generateFiles,
+                onSelected: agent.busy
+                    ? null
+                    : (value) {
+                        agent.generateFiles = value;
+                        agent.update();
+                      },
+              ),
+              const Text(
+                '可生成 Word、Excel、文本等新副本',
+                style: TextStyle(fontSize: 10, color: muted),
+              ),
+            ],
+          ),
+        ),
         Container(
           decoration: BoxDecoration(
             color: Colors.white,
@@ -672,7 +712,7 @@ class _WorkspacePageState extends State<WorkspacePage>
                   const SizedBox(width: 6),
                   Expanded(
                     child: Text(
-                      agent.run == null ? '专家并行 · 结果复核' : '继续追问将复用本轮资料',
+                      agent.run == null ? '读取资料 · 分析处理 · 生成结果' : '继续追问将复用本轮资料',
                       style: TextStyle(color: muted, fontSize: 11),
                     ),
                   ),
@@ -686,7 +726,7 @@ class _WorkspacePageState extends State<WorkspacePage>
                     FilledButton.icon(
                       onPressed: agent.connected ? submit : null,
                       icon: const Icon(Icons.arrow_upward_rounded, size: 17),
-                      label: Text(agent.run == null ? '开始协作' : '发送追问'),
+                      label: Text(agent.run == null ? '开始处理' : '发送追问'),
                       style: FilledButton.styleFrom(
                         backgroundColor: accent,
                         padding: const EdgeInsets.symmetric(
@@ -735,35 +775,11 @@ class _WorkspacePageState extends State<WorkspacePage>
           child: LinearProgressIndicator(minHeight: 2),
         ),
       const SizedBox(height: 10),
-      SingleChildScrollView(
-        scrollDirection: Axis.horizontal,
-        child: _inlineTeam(),
-      ),
-      const SizedBox(height: 8),
-      SingleChildScrollView(
-        scrollDirection: Axis.horizontal,
-        child: Row(
-          children: [
-            _tab('chat', '对话', Icons.chat_bubble_outline),
-            _tab('activity', '执行轨迹', Icons.timeline),
-            _tab('report', '分析报告', Icons.description_outlined),
-            _tab('expert', '专家成果', Icons.person_outline),
-          ],
-        ),
-      ),
-      const SizedBox(height: 10),
       Expanded(
         child: ListView(
           controller: contentScroll,
-          key: ValueKey('${agent.runId}-${agent.tab}'),
-          children: [
-            if (agent.tab == 'chat') _conversation(),
-            if (agent.tab == 'activity')
-              TraceView(agent: agent, onExport: exportTrace),
-            if (agent.tab == 'report') _report(),
-            if (agent.tab == 'expert') _expertDetail(),
-            const SizedBox(height: 18),
-          ],
+          key: ValueKey(agent.runId),
+          children: [_conversation(), const SizedBox(height: 18)],
         ),
       ),
     ],
@@ -810,37 +826,42 @@ class _WorkspacePageState extends State<WorkspacePage>
                 ],
               ),
               const SizedBox(height: 12),
-              if ((turn['answer'] as String? ?? turn['report'] as String? ?? '')
-                  .isNotEmpty)
+              if (turn['id'] == agent.runId ||
+                  (turn['traces'] as List? ?? []).isNotEmpty) ...[
+                TraceView(agent: agent, turn: turn, onExport: exportTrace),
+                const SizedBox(height: 14),
+              ],
+              if ((turn['answer'] as String? ?? '').isNotEmpty ||
+                  (turn['report'] as String? ?? '').isNotEmpty) ...[
+                const Text(
+                  '生成结果',
+                  style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+                ),
+                const SizedBox(height: 10),
                 MarkdownBody(
-                  data:
-                      turn['answer'] as String? ??
-                      turn['report'] as String? ??
-                      '',
+                  data: (turn['answer'] as String? ?? '').isNotEmpty
+                      ? turn['answer'] as String
+                      : turn['report'] as String? ?? '',
                   selectable: true,
-                )
-              else
+                ),
+              ] else if (turn['status'] != 'running')
                 Text(
-                  turn['status'] == 'running'
-                      ? '正在分析资料并复核结果…'
-                      : statusLabel(turn['status'] as String?),
+                  turn['error'] as String? ??
+                      statusLabel(turn['status'] as String?),
                   style: const TextStyle(color: muted),
                 ),
+              if ((turn['deliverables'] as List? ?? []).isNotEmpty)
+                _deliveryCards(turn),
               if (turn['id'] == agent.runId) ...[
                 const SizedBox(height: 14),
                 Wrap(
                   spacing: 8,
                   children: [
-                    TextButton.icon(
-                      onPressed: () => agent.setTab('activity'),
-                      icon: const Icon(Icons.timeline, size: 16),
-                      label: Text('查看 ${agent.traces.length} 个执行步骤'),
-                    ),
                     if (agent.report.isNotEmpty)
                       TextButton.icon(
-                        onPressed: () => agent.setTab('report'),
-                        icon: const Icon(Icons.description_outlined, size: 16),
-                        label: const Text('完整报告与来源'),
+                        onPressed: exportReport,
+                        icon: const Icon(Icons.download_outlined, size: 16),
+                        label: const Text('导出结果'),
                       ),
                     if (agent.answer.isNotEmpty)
                       IconButton(
@@ -860,6 +881,47 @@ class _WorkspacePageState extends State<WorkspacePage>
     ],
   );
 
+  Widget _deliveryCards(Json turn) => Padding(
+    padding: const EdgeInsets.only(top: 14),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text(
+          '成果文件',
+          style: TextStyle(fontWeight: FontWeight.w600, fontSize: 12),
+        ),
+        const Text(
+          '已保存新副本，可下载或继续要求修改。',
+          style: TextStyle(fontSize: 11, color: muted),
+        ),
+        for (final item in turn['deliverables'] as List)
+          ListTile(
+            contentPadding: EdgeInsets.zero,
+            leading: const Icon(
+              Icons.insert_drive_file_outlined,
+              color: accent,
+            ),
+            title: Text(
+              item['name'] as String,
+              style: const TextStyle(fontSize: 12),
+            ),
+            subtitle: Text(
+              '${((item['bytes'] as num) / 1024).toStringAsFixed(1)} KB',
+              style: const TextStyle(fontSize: 10),
+            ),
+            trailing: TextButton.icon(
+              onPressed: () => exportFile(
+                Map<String, dynamic>.from(item as Map),
+                turn['id'] as String,
+              ),
+              icon: const Icon(Icons.download_outlined, size: 16),
+              label: const Text('下载'),
+            ),
+          ),
+      ],
+    ),
+  );
+
   Future<void> exportTrace() async {
     final location = await getSaveLocation(
       suggestedName: 'RWKVBuddy-执行轨迹.json',
@@ -876,170 +938,6 @@ class _WorkspacePageState extends State<WorkspacePage>
     }
   }
 
-  Widget _tab(String id, String label, IconData icon) => TextButton.icon(
-    onPressed: () => agent.setTab(id),
-    icon: Icon(icon, size: 17),
-    label: Text(label, style: const TextStyle(fontSize: 12)),
-    style: TextButton.styleFrom(
-      foregroundColor: agent.tab == id ? accent : muted,
-      backgroundColor: agent.tab == id
-          ? const Color(0xFFECE9FC)
-          : Colors.transparent,
-      padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 13),
-    ),
-  );
-
-  Widget _report() {
-    if (agent.report.isEmpty) {
-      return _empty('专家交付并完成复核后，报告会出现在这里', Icons.description_outlined);
-    }
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Wrap(
-          spacing: 9,
-          runSpacing: 5,
-          children: [
-            OutlinedButton.icon(
-              onPressed: exportReport,
-              icon: const Icon(Icons.file_download_outlined, size: 17),
-              label: const Text('导出报告'),
-            ),
-            TextButton.icon(
-              onPressed: () async {
-                await Clipboard.setData(ClipboardData(text: agent.report));
-                if (mounted) {
-                  ScaffoldMessenger.of(
-                    context,
-                  ).showSnackBar(const SnackBar(content: Text('报告已复制')));
-                }
-              },
-              icon: const Icon(Icons.copy_outlined, size: 16),
-              label: const Text('复制'),
-            ),
-            if (Platform.isWindows)
-              TextButton.icon(
-                onPressed: () {
-                  unawaited(
-                    Process.run('explorer.exe', ['/select,', agent.reportPath]),
-                  );
-                },
-                icon: const Icon(Icons.folder_open, size: 16),
-                label: const Text('所在文件夹'),
-              ),
-          ],
-        ),
-        const SizedBox(height: 15),
-        Container(
-          width: double.infinity,
-          padding: const EdgeInsets.all(22),
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(14),
-          ),
-          child: MarkdownBody(data: agent.report, selectable: true),
-        ),
-      ],
-    );
-  }
-
-  Widget _expertDetail() {
-    final role = agent.roles.firstWhere(
-      (r) => r['id'] == agent.selectedRole,
-      orElse: () => agent.roles.first,
-    );
-    final artifact = agent.selectedArtifact;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          role['name'] as String,
-          style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
-        ),
-        const SizedBox(height: 5),
-        Text(
-          role['duty'] as String,
-          style: const TextStyle(color: muted, fontSize: 12),
-        ),
-        const SizedBox(height: 16),
-        if (artifact == null)
-          _empty(
-            agent.tasks[role['id']]?['detail'] as String? ?? '等待任务分配',
-            Icons.person_outline,
-          )
-        else ...[
-          _tag(
-            '${artifact['source'] == 'rwkv' ? '远端模型' : '本地规则'} · v${artifact['version']}',
-            accent,
-          ),
-          const SizedBox(height: 14),
-          Text(artifact['analysis']['summary'] as String),
-          const SizedBox(height: 15),
-          for (final finding in artifact['analysis']['findings'] as List)
-            Padding(
-              padding: const EdgeInsets.only(bottom: 18),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  SelectableText(
-                    finding['text'] as String,
-                    style: const TextStyle(fontSize: 13, height: 1.8),
-                  ),
-                  const SizedBox(height: 7),
-                  _tag(
-                    '来源 ${(finding['evidenceIds'] as List).join(' · ')}',
-                    muted,
-                  ),
-                ],
-              ),
-            ),
-          if (artifact['toolVerified'] == true)
-            const Text(
-              '输入台账的数值字段已由本机工具核算',
-              style: TextStyle(fontSize: 11, color: Color(0xFF23856D)),
-            ),
-        ],
-      ],
-    );
-  }
-
-  Widget _inlineTeam() => Row(
-    spacing: 8,
-    children: agent.roles
-        .map(
-          (role) => ActionChip(
-            onPressed: () => agent.selectRole(role['id'] as String),
-            avatar: Icon(
-              _roleIcon(role['id'] as String),
-              size: 15,
-              color: accent,
-            ),
-            label: Text(
-              '${role['name']} · ${statusLabel(agent.tasks[role['id']]?['status'] as String?)}',
-              style: const TextStyle(fontSize: 10),
-            ),
-            backgroundColor: Colors.white,
-            side: const BorderSide(color: line),
-          ),
-        )
-        .toList(),
-  );
-  Widget _empty(String text, IconData icon) => Padding(
-    padding: const EdgeInsets.symmetric(vertical: 30),
-    child: Center(
-      child: Column(
-        children: [
-          Icon(icon, size: 32, color: const Color(0xFFA9AFC1)),
-          const SizedBox(height: 12),
-          Text(
-            text,
-            textAlign: TextAlign.center,
-            style: const TextStyle(fontSize: 12, color: muted),
-          ),
-        ],
-      ),
-    ),
-  );
   Widget _tag(String text, Color color) => DecoratedBox(
     decoration: BoxDecoration(
       color: color.withValues(alpha: 0.08),
@@ -1050,15 +948,6 @@ class _WorkspacePageState extends State<WorkspacePage>
       child: Text(text, style: TextStyle(color: color, fontSize: 10)),
     ),
   );
-  IconData _roleIcon(String id) =>
-      const {
-        'coordinator': Icons.hub_outlined,
-        'operations': Icons.analytics_outlined,
-        'cash': Icons.account_balance_wallet_outlined,
-        'risk': Icons.shield_outlined,
-        'reviewer': Icons.fact_check_outlined,
-      }[id] ??
-      Icons.person_outline;
   Color _statusColor(String? status) => switch (status) {
     'verified' || 'completed' => const Color(0xFF23856D),
     'failed' || 'blocked' => const Color(0xFFCA624D),

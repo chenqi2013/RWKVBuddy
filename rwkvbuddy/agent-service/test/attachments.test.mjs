@@ -27,8 +27,8 @@ test('selected PDF, DOCX, XLSX and Unicode text produce a report using only actu
   const state = await run.execute();
   assert.equal(state.status, 'completed', state.error);
   assert.equal(state.attachments.filter((item) => item.status === 'parsed').length, 4);
-  assert.equal(state.artifacts.length, 3);
-  assert.equal(state.roles.find((role) => role.id === 'cash').name, '数据分析师');
+  assert.deepEqual(state.artifacts, []);
+  assert.deepEqual(state.roles, []);
   for (const value of ['客户项目说明 & 风险', '12345', '销售明细', 'B1=1200.50', '含税收入', 'B1-B2', '7890', '9876']) assert.ok(state.report.includes(value), value);
   assert.ok(!state.report.includes('北辰科技'));
   assert.ok(state.report.includes('提取文本行号'));

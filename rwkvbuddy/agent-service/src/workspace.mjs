@@ -1,46 +1,100 @@
 import { readdir, readFile, lstat, realpath } from 'node:fs/promises';
 import { resolve, join, relative, extname } from 'node:path';
 import { createHash } from 'node:crypto';
+import { spawn } from 'node:child_process';
 import { checkAbort } from './runtime.mjs';
 
 const skip = new Set(['node_modules', 'build', 'dist', 'runs', 'vendor', 'target', 'runtime']);
-const extensions = new Set(['.md', '.txt', '.csv', '.tsv', '.json', '.jsonl', '.yaml', '.yml', '.dart', '.ts', '.js', '.mjs', '.py', '.toml']);
+const extensions = new Set(['.md', '.txt', '.csv', '.tsv', '.json', '.jsonl', '.yaml', '.yml', '.dart', '.ts', '.js', '.mjs', '.py', '.toml', '.tsx', '.jsx', '.html', '.css', '.swift', '.kt', '.java', '.cpp', '.cc', '.c', '.h', '.rs', '.go', '.sh']);
 export const hash = (text) => createHash('sha256').update(text).digest('hex');
+
+// Root documentation, manifests and entry points should reach the model before fixtures.
+const manifestNames = /^(pubspec\.yaml|package\.json|Cargo\.toml|pyproject\.toml|go\.mod|CMakeLists\.txt|Podfile|Dockerfile)$/i;
+function sourcePriority(path) {
+  const parts = path.split('/');
+  const name = parts.at(-1);
+  if (parts.length === 1 && /^readme(?:\.|$)/i.test(name)) return 0;
+  if (parts.length === 1 && manifestNames.test(name)) return 1;
+  if (/(^|\/)(fixtures?|tests?|examples?|samples?)(\/|$)/i.test(path)) return 8;
+  if (manifestNames.test(name)) return 2;
+  if (/^(lib|src|app)\/(main|index|app)\./i.test(path) || /^(main|index|app|service)\./i.test(name)) return 3;
+  if (/^readme(?:\.|$)/i.test(name)) return 4;
+  if (/^(lib|src|app)\//i.test(path)) return 5;
+  return 6;
+}
+
+// Use Git's ignore rules when available, including rules inherited from a parent repo.
+// Non-Git directories and machines without Git retain the normal filename exclusions.
+async function ignoredPaths(root, paths, signal) {
+  if (!paths.length) return new Set();
+  checkAbort(signal);
+  return new Promise((resolveIgnored, reject) => {
+    const child = spawn('git', ['check-ignore', '--stdin', '-z'], { cwd: root, windowsHide: true, stdio: ['pipe', 'pipe', 'ignore'] });
+    let output = '';
+    const timer = setTimeout(() => child.kill(), 5000);
+    const abort = () => child.kill();
+    signal?.addEventListener('abort', abort, { once: true });
+    child.stdout.setEncoding('utf8');
+    child.stdout.on('data', (chunk) => { output += chunk; });
+    child.stdin.on('error', () => {});
+    child.on('error', () => {});
+    child.on('close', (code) => {
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', abort);
+      if (signal?.aborted) { reject(new DOMException('任务已取消', 'AbortError')); return; }
+      const ignored = code === 0 || code === 1 ? new Set(output.split('\0').filter(Boolean)) : new Set();
+      // An explicitly selected ignored directory (e.g. bundled demo under build/)
+      // is its own analysis root; an ancestor's blanket ignore must not hide all of it.
+      resolveIgnored(ignored.has('.') ? new Set() : ignored);
+    });
+    child.stdin.end(['.', ...paths].join('\0') + '\0');
+  });
+}
 
 export async function scanWorkspace(path, signal) {
   const root = await realpath(resolve(path));
   const files = {};
   const warnings = [];
-  let total = 0;
+  const candidates = [];
+  const directories = [{ path: root, depth: 0 }];
   let visited = 0;
-  let exhausted = false;
-  const walk = async (dir, depth = 0) => {
+  let limited = false;
+  for (let index = 0; index < directories.length && !limited; index++) {
     checkAbort(signal);
-    if (depth > 12 || exhausted) return;
-    const entries = (await readdir(dir, { withFileTypes: true })).sort((a, b) => a.name.localeCompare(b.name));
+    const dir = directories[index];
+    const entries = (await readdir(dir.path, { withFileTypes: true })).sort((a, b) => a.name.localeCompare(b.name));
     for (const entry of entries) {
       checkAbort(signal);
-      if (++visited > 12000) { exhausted = true; warnings.push('目录项超过 12000，扫描已停止。'); break; }
+      if (++visited > 12000) { limited = true; warnings.push('目录项超过 12000，扫描已停止。'); break; }
       if (entry.name.startsWith('.') || skip.has(entry.name)) continue;
-      const full = join(dir, entry.name);
+      const full = join(dir.path, entry.name);
       const stat = await lstat(full);
       if (stat.isSymbolicLink()) continue;
-      if (stat.isDirectory()) { await walk(full, depth + 1); continue; }
-      if (!stat.isFile() || !extensions.has(extname(entry.name).toLowerCase())) continue;
-      if (/(secret|credential|token|password|private[-_]?key)/i.test(entry.name)) continue;
-      if (stat.size > 256 * 1024) { warnings.push(`${relative(root, full)} 超过 256 KB，未读取。`); continue; }
-      if (total + stat.size > 4 * 1024 * 1024 || Object.keys(files).length >= 240) {
-        exhausted = true; warnings.push('已达到 240 个文本文件或 4 MB 的扫描上限。'); break;
+      if (stat.isDirectory()) {
+        if (dir.depth < 12) directories.push({ path: full, depth: dir.depth + 1 });
+        continue;
       }
-      const buffer = await readFile(full);
-      if (buffer.includes(0)) continue;
-      total += buffer.length;
-      const name = relative(root, full).replaceAll('\\', '/');
-      const content = buffer.toString('utf8').replace(/^\uFEFF/, '');
-      files[name] = { content, hash: hash(content), lines: content.split(/\r?\n/).length };
+      if (!stat.isFile() || (!extensions.has(extname(entry.name).toLowerCase()) && !manifestNames.test(entry.name))) continue;
+      if (/(secret|credential|token|password|private[-_]?key|^default-connection\.json$)/i.test(entry.name)) continue;
+      candidates.push({ full, name: relative(root, full).replaceAll('\\', '/'), size: stat.size });
     }
-  };
-  await walk(root);
+  }
+  const ignored = await ignoredPaths(root, candidates.map((file) => file.name), signal);
+  candidates.sort((a, b) => sourcePriority(a.name) - sourcePriority(b.name) || a.name.split('/').length - b.name.split('/').length || a.name.localeCompare(b.name));
+  let total = 0;
+  for (const file of candidates) {
+    checkAbort(signal);
+    if (ignored.has(file.name)) continue;
+    if (file.size > 256 * 1024) { warnings.push(`${file.name} 超过 256 KB，未读取。`); continue; }
+    if (total + file.size > 4 * 1024 * 1024 || Object.keys(files).length >= 240) {
+      warnings.push('已达到 240 个文本文件或 4 MB 的扫描上限。'); break;
+    }
+    const buffer = await readFile(file.full);
+    if (buffer.includes(0)) continue;
+    total += buffer.length;
+    const content = buffer.toString('utf8').replace(/^\uFEFF/, '');
+    files[file.name] = { content, hash: hash(content), lines: content.split(/\r?\n/).length };
+  }
   if (!Object.keys(files).length) throw new Error('此目录没有可分析的文本文件，请选择工作目录或使用内置样例。');
   const inputHashes = Object.fromEntries(Object.entries(files).map(([path, file]) => [path, file.hash]));
   return { root, files, warnings, inputHashes, snapshotHash: hash(JSON.stringify(inputHashes)) };
@@ -66,7 +120,10 @@ export function financeSnapshot(snapshot) {
     evidence.push({ id, path, start, end, label, hash: snapshot.files[path].hash });
     return id;
   };
-  const taxPath = Object.keys(snapshot.files).find((p) => p.endsWith('tax_rates.tsv'));
+  // This parser supports only the sample schema at the selected root, never nested projects/fixtures.
+  const rootLedger = Object.keys(snapshot.files).some((path) => /^jobs\/co-[^/]+\/ledger\.csv$/.test(path));
+  if (!rootLedger) return { companies, cash, warnings, evidence, isFinance: false };
+  const taxPath = snapshot.files['shared/tax_rates.tsv'] ? 'shared/tax_rates.tsv' : undefined;
   const rates = new Map();
   let taxEvidence;
   if (taxPath) {
@@ -107,7 +164,7 @@ export function financeSnapshot(snapshot) {
       companies.push({ entity, label: labels[entity] || entity, revenue, cost, rate, profit, evidenceIds: [evidenceId, taxEvidence] });
       if (omitted.size) warnings.push(`${labels[entity] || entity}：核算仅含 sales/service、cogs/opex，未计入 ${[...omitted].join('、')}。`);
     }
-    if (path.endsWith('cash.jsonl')) {
+    if (path === 'jobs/group-cash/cash.jsonl') {
       const lines = file.content.trim().split(/\r?\n/);
       const item = { inflow: 0, outflow: 0, inflowCount: 0, outflowCount: 0, ignored: 0, parties: new Set() };
       for (const [index, line] of lines.entries()) {
@@ -131,15 +188,15 @@ export function financeSnapshot(snapshot) {
 }
 
 export function workspaceFacts(snapshot) {
-  const evidence = Object.entries(snapshot.files).map(([path, file], index) => ({
+  const evidence = Object.entries(snapshot.files).sort(([a], [b]) => sourcePriority(a) - sourcePriority(b) || a.split('/').length - b.split('/').length || a.localeCompare(b)).map(([path, file], index) => ({
     id: `E${index + 1}`, path, start: 1, end: file.lines, hash: file.hash, label: path,
     ...(file.originalPath ? { originalPath: file.originalPath, extracted: file.extracted } : {}),
   }));
   const excerptLimit = snapshot.attachments ? Math.min(12000, Math.floor(60000 / evidence.length)) : 1600;
   const facts = evidence.map((source) => ({ ...source, excerpt: snapshot.files[source.path].content.slice(0, excerptLimit) }));
   const warnings = [...snapshot.warnings];
-  if (Object.values(snapshot.files).some((file) => file.content.length > excerptLimit)) warnings.push(`专家分析每个文件的前 ${excerptLimit} 个字符。${snapshot.attachments ? '完整提取文本已保存在任务 inputs 目录。' : '未通读超出片段的内容。'}`);
-  if (!snapshot.attachments && facts.length > 45) warnings.push('模型仅接收前 45 个文件片段与本地检查结果，未通读所有文件。');
+  if (Object.values(snapshot.files).some((file) => file.content.length > excerptLimit)) warnings.push(`初始分析提供每个文件的前 ${excerptLimit} 个字符。${snapshot.attachments ? '完整提取文本已保存在任务 inputs 目录。' : '未通读超出片段的内容。'}`);
+  if (!snapshot.attachments && facts.length > 45) warnings.push('模型仅接收前 45 个文件片段，优先 README、工程配置及入口代码；其余文件可通过资料工具按需读取。');
   return { evidence, files: facts, warnings, sourceMode: snapshot.textOnly ? 'text' : snapshot.attachments ? 'files' : 'directory' };
 }
 export function money(cents) {

@@ -3,17 +3,18 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'agent_controller.dart';
 
-class TraceView extends StatefulWidget {
-  const TraceView({super.key, required this.agent, required this.onExport});
+/// Actual reads, model requests and tools in execution order.
+class TraceView extends StatelessWidget {
+  const TraceView({
+    super.key,
+    required this.agent,
+    required this.onExport,
+    this.turn,
+  });
   final AgentController agent;
   final VoidCallback onExport;
-  @override
-  State<TraceView> createState() => _TraceViewState();
-}
+  final Json? turn;
 
-class _TraceViewState extends State<TraceView> {
-  String role = 'all';
-  String filter = 'all';
   String format(dynamic value) {
     if (value is String) {
       try {
@@ -25,309 +26,224 @@ class _TraceViewState extends State<TraceView> {
     return const JsonEncoder.withIndent('  ').convert(value);
   }
 
-  String author(String? id) =>
-      widget.agent.roles.where((item) => item['id'] == id).firstOrNull?['name']
-          as String? ??
-      '协调员';
-  Color color(String? status) => status == 'failed'
-      ? Colors.deepOrange
-      : status == 'cancelled'
-      ? Colors.grey
-      : status == 'running'
-      ? const Color(0xFF6155D9)
-      : Colors.teal;
+  String title(Json trace) => switch (trace['name']) {
+    'input.read' => trace['input']?['reuse'] == true ? '读取上一轮资料和成果' : '读取资料',
+    'read_file' => '读取文件内容',
+    'search_text' => '检索文件内容',
+    'calculator' => '计算数据',
+    'files.create' => '生成成果文件',
+    'lua.ledger' => '核算经营数据',
+    'lua.cash' => '核算资金流水',
+    'local.analyze' => '整理资料与本地分析',
+    _ => trace['kind'] == 'model' ? '分析与整理' : '调用工具：${trace['name']}',
+  };
+
   @override
   Widget build(BuildContext context) {
-    final agent = widget.agent;
-    final traces = agent.traces
-        .where(
-          (item) =>
-              (role == 'all' || item['roleId'] == role) &&
-              (filter == 'all' ||
-                  filter == item['kind'] ||
-                  filter == item['status']),
-        )
-        .toList();
+    final current = turn == null || turn!['id'] == agent.runId;
+    final traces =
+        (current ? agent.traces : (turn!['traces'] as List? ?? []).cast<Json>())
+            .where((trace) => trace['name'] != 'snapshot.inspect')
+            .map(
+              (trace) =>
+                  trace['status'] == 'running' &&
+                      (turn ?? agent.run)?['status'] == 'interrupted'
+                  ? {...trace, 'status': 'interrupted'}
+                  : trace,
+            )
+            .toList();
+    final events = current
+        ? agent.events
+        : (turn!['events'] as List? ?? []).cast<Json>();
+    // Pair a read with its actual completion, preserving duplicate filenames.
+    final reads = <Json>[];
+    for (final event in events) {
+      final type = event['type'];
+      if (type == 'input.file_started') {
+        reads.add({
+          ...Map<String, dynamic>.from(event['payload'] as Map),
+          'status': 'running',
+        });
+      } else if (type == 'input.file_parsed' || type == 'input.file_rejected') {
+        final payload = Map<String, dynamic>.from(event['payload'] as Map);
+        final index = reads.indexWhere(
+          (r) => r['name'] == payload['name'] && r['status'] == 'running',
+        );
+        final read = {
+          ...payload,
+          'status': type == 'input.file_parsed' ? 'completed' : 'failed',
+        };
+        if (index < 0) {
+          reads.add(read);
+        } else {
+          reads[index] = read;
+        }
+      }
+    }
+    final runStatus = (turn ?? agent.run)?['status'];
+    if (runStatus != null && runStatus != 'running') {
+      for (final read in reads.where((read) => read['status'] == 'running')) {
+        read['status'] = runStatus == 'failed' ? 'failed' : 'cancelled';
+        read['error'] = '读取已中断';
+      }
+    }
     return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        const SizedBox(height: 8),
-        Wrap(
-          spacing: 12,
-          runSpacing: 10,
-          crossAxisAlignment: WrapCrossAlignment.center,
-          children: [
-            Text(
-              '${agent.traces.length} 个执行步骤',
-              style: const TextStyle(fontWeight: FontWeight.w600),
-            ),
-            SizedBox(
-              width: 160,
-              child: DropdownButtonFormField<String>(
-                value: role,
-                isDense: true,
-                decoration: const InputDecoration(
-                  labelText: '角色',
-                  contentPadding: EdgeInsets.all(10),
-                ),
-                items: [
-                  const DropdownMenuItem(value: 'all', child: Text('全部角色')),
-                  ...agent.roles.map(
-                    (item) => DropdownMenuItem(
-                      value: item['id'] as String,
-                      child: Text(item['name'] as String),
-                    ),
-                  ),
-                ],
-                onChanged: (value) => setState(() => role = value!),
-              ),
-            ),
-            SizedBox(
-              width: 140,
-              child: DropdownButtonFormField<String>(
-                value: filter,
-                isDense: true,
-                decoration: const InputDecoration(
-                  labelText: '类型 / 状态',
-                  contentPadding: EdgeInsets.all(10),
-                ),
-                items: const [
-                  DropdownMenuItem(value: 'all', child: Text('全部')),
-                  DropdownMenuItem(value: 'tool', child: Text('工具调用')),
-                  DropdownMenuItem(value: 'model', child: Text('模型请求')),
-                  DropdownMenuItem(value: 'failed', child: Text('失败步骤')),
-                ],
-                onChanged: (value) => setState(() => filter = value!),
-              ),
-            ),
-            TextButton.icon(
-              onPressed: agent.runId.isEmpty ? null : widget.onExport,
-              icon: const Icon(Icons.download_outlined, size: 17),
-              label: const Text('导出轨迹'),
-            ),
-          ],
-        ),
-        const SizedBox(height: 20),
-        if (agent.traces.isNotEmpty) _lanes(),
-        const SizedBox(height: 18),
-        for (final trace in traces)
-          Card(
-            margin: const EdgeInsets.only(bottom: 10),
-            elevation: 0,
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(12),
-              side: const BorderSide(color: Color(0xFFE8EAF1)),
-            ),
-            child: ExpansionTile(
-              key: ValueKey(trace['id']),
-              leading: Icon(
-                trace['kind'] == 'model'
-                    ? Icons.auto_awesome_outlined
-                    : Icons.build_outlined,
-                color: color(trace['status'] as String?),
-                size: 20,
-              ),
-              title: Text(
-                '${author(trace['roleId'] as String?)} · ${trace['name']}',
-                style: const TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-              subtitle: Text(
-                '${statusLabel(trace['status'] as String?)}${trace['durationMs'] != null ? ' · ${trace['durationMs']} ms' : ' · 等待响应'}${trace['characters'] != null ? ' · ${trace['characters']} 字符' : ''}',
-                style: TextStyle(
-                  fontSize: 11,
-                  color: color(trace['status'] as String?),
-                ),
-              ),
-              childrenPadding: const EdgeInsets.fromLTRB(18, 0, 18, 18),
-              children: [
-                _detail('参数 / 输入', format(trace['input'])),
-                if (trace['error'] != null)
-                  _detail('错误', trace['error'] as String, isError: true),
-                if (trace['output'] != null)
-                  _detail('结果', format(trace['output'])),
-                if (trace['status'] == 'running' &&
-                    (trace['preview'] as String? ?? '').isNotEmpty)
-                  _detail('正在接收的响应（尚未校验）', trace['preview'] as String),
-              ],
-            ),
-          ),
-        if (traces.isEmpty)
-          const Padding(
-            padding: EdgeInsets.all(22),
-            child: Text('暂无符合条件的步骤。任务开始后将显示真实调用记录。'),
-          ),
-        const SizedBox(height: 15),
-        ExpansionTile(
-          title: const Text('任务事件与文件读取记录', style: TextStyle(fontSize: 12)),
-          children: [
-            for (final event in agent.events.where(
-              (item) => ![
-                'trace.started',
-                'trace.finished',
-                'task.state_changed',
-              ].contains(item['type']),
-            ))
-              ListTile(
-                dense: true,
-                title: Text(
-                  event['payload']?['summary'] as String? ??
-                      event['type'] as String,
-                  style: const TextStyle(fontSize: 11),
-                ),
-                subtitle: Text(
-                  '${event['timestamp'] ?? ''}',
-                  style: const TextStyle(fontSize: 10),
-                ),
-              ),
-          ],
-        ),
-      ],
-    );
-  }
-
-  Widget _detail(String title, String value, {bool isError = false}) => Padding(
-    padding: const EdgeInsets.only(top: 12),
-    child: Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Row(
           children: [
-            Expanded(
+            const Expanded(
               child: Text(
-                title,
-                style: TextStyle(
-                  fontSize: 11,
-                  fontWeight: FontWeight.w600,
-                  color: isError ? Colors.deepOrange : Colors.grey,
-                ),
+                '处理过程',
+                style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
               ),
             ),
-            IconButton(
-              tooltip: '复制$title',
-              visualDensity: VisualDensity.compact,
-              icon: const Icon(Icons.copy_outlined, size: 14),
-              onPressed: () => Clipboard.setData(ClipboardData(text: value)),
-            ),
+            if (current && agent.runId.isNotEmpty)
+              IconButton(
+                tooltip: '导出处理记录',
+                visualDensity: VisualDensity.compact,
+                onPressed: onExport,
+                icon: const Icon(Icons.download_outlined, size: 16),
+              ),
           ],
         ),
-        Container(
-          width: double.infinity,
-          padding: const EdgeInsets.all(12),
-          decoration: BoxDecoration(
-            color: const Color(0xFFF6F7FB),
-            borderRadius: BorderRadius.circular(8),
+        if (traces.isEmpty && reads.isEmpty)
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 10),
+            child: Text(
+              (turn ?? agent.run)?['status'] == 'running'
+                  ? '正在准备资料…'
+                  : '暂无处理记录',
+              style: const TextStyle(fontSize: 12, color: Colors.grey),
+            ),
           ),
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxHeight: 260),
-            child: SingleChildScrollView(
-              child: SelectableText(
-                value,
-                style: const TextStyle(
-                  fontSize: 11,
-                  fontFamily: 'Consolas',
-                  height: 1.6,
-                ),
-              ),
+        if (!traces.any((trace) => trace['name'] == 'input.read'))
+          for (final read in reads) _read(read),
+        for (final trace in traces) ...[
+          _step(trace),
+          if (trace['name'] == 'input.read')
+            for (final read in reads) _read(read),
+        ],
+      ],
+    );
+  }
+
+  Widget _read(Json read) => Padding(
+    padding: const EdgeInsets.only(left: 20, bottom: 6),
+    child: Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _indicator(read['status'] as String?),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Text(
+            '${read['name']} · ${read['status'] == 'completed'
+                ? '已读取 ${read['lines']} 行'
+                : read['status'] == 'failed'
+                ? '读取失败：${read['error']}'
+                : read['status'] == 'cancelled'
+                ? '已取消'
+                : '正在读取'}',
+            style: TextStyle(
+              fontSize: 11,
+              color: read['status'] == 'failed'
+                  ? Colors.deepOrange
+                  : const Color(0xFF767D90),
             ),
           ),
         ),
       ],
     ),
   );
-  Widget _lanes() {
-    final traces = widget.agent.traces;
-    final start = traces
-        .map(
-          (item) => DateTime.parse(
-            item['startedAt'] as String,
-          ).millisecondsSinceEpoch,
+
+  Widget _indicator(String? status) => status == 'running'
+      ? const SizedBox(
+          width: 14,
+          height: 14,
+          child: CircularProgressIndicator(strokeWidth: 1.5),
         )
-        .reduce((a, b) => a < b ? a : b);
-    final end = traces
-        .map(
-          (item) => item['finishedAt'] != null
-              ? DateTime.parse(
-                  item['finishedAt'] as String,
-                ).millisecondsSinceEpoch
-              : DateTime.now().millisecondsSinceEpoch,
-        )
-        .reduce((a, b) => a > b ? a : b);
-    final duration = (end - start).clamp(1, 1 << 40);
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
+      : Icon(
+          status == 'failed'
+              ? Icons.error_outline
+              : (status == 'cancelled' || status == 'interrupted')
+              ? Icons.stop_circle_outlined
+              : Icons.check_circle_outline,
+          size: 14,
+          color: status == 'failed'
+              ? Colors.deepOrange
+              : (status == 'cancelled' || status == 'interrupted')
+              ? Colors.grey
+              : Colors.teal,
+        );
+
+  Widget _step(Json trace) => ExpansionTile(
+    key: ValueKey(trace['id']),
+    tilePadding: EdgeInsets.zero,
+    childrenPadding: const EdgeInsets.only(left: 22, bottom: 12),
+    dense: true,
+    shape: const Border(),
+    collapsedShape: const Border(),
+    leading: _indicator(trace['status'] as String?),
+    title: Text(title(trace), style: const TextStyle(fontSize: 12)),
+    subtitle: Text(
+      [
+        if (trace['kind'] == 'model' || trace['kind'] == 'tool')
+          '${trace['name']}',
+        statusLabel(trace['status'] as String?),
+        if (trace['durationMs'] != null)
+          '${(trace['durationMs'] / 1000).toStringAsFixed(1)} 秒',
+        if (trace['error'] != null) '${trace['error']}',
+      ].join(' · '),
+      style: TextStyle(
+        fontSize: 10,
+        color: trace['status'] == 'failed' ? Colors.deepOrange : Colors.grey,
+      ),
+    ),
+    children: [
+      if (trace['input'] != null) _detail('输入', format(trace['input'])),
+      if (trace['error'] != null) _detail('错误', '${trace['error']}'),
+      if (trace['output'] != null) _detail('输出', format(trace['output'])),
+      if (trace['status'] == 'running' && trace['characters'] != null)
         Text(
-          '执行时间线 · ${(duration / 1000).toStringAsFixed(2)} 秒',
+          '正在接收响应 · ${trace['characters']} 字符',
           style: const TextStyle(fontSize: 11, color: Colors.grey),
         ),
-        const SizedBox(height: 10),
-        for (final item in widget.agent.roles)
-          Padding(
-            padding: const EdgeInsets.only(bottom: 8),
-            child: Row(
-              children: [
-                SizedBox(
-                  width: 85,
-                  child: Text(
-                    item['name'] as String,
-                    style: const TextStyle(fontSize: 10),
-                  ),
-                ),
-                Expanded(
-                  child: LayoutBuilder(
-                    builder: (context, constraints) => Container(
-                      height: 16,
-                      color: const Color(0xFFEDEEF4),
-                      child: Stack(
-                        children: [
-                          for (final trace in traces.where(
-                            (trace) => trace['roleId'] == item['id'],
-                          ))
-                            Positioned(
-                              left:
-                                  ((DateTime.parse(
-                                                trace['startedAt'] as String,
-                                              ).millisecondsSinceEpoch -
-                                              start) /
-                                          duration *
-                                          constraints.maxWidth)
-                                      .clamp(0, constraints.maxWidth - 1),
-                              width:
-                                  (((trace['durationMs'] as num? ??
-                                                  DateTime.now()
-                                                          .millisecondsSinceEpoch -
-                                                      DateTime.parse(
-                                                        trace['startedAt']
-                                                            as String,
-                                                      ).millisecondsSinceEpoch) /
-                                              duration) *
-                                          constraints.maxWidth)
-                                      .clamp(2, constraints.maxWidth),
-                              top: 2,
-                              bottom: 2,
-                              child: Tooltip(
-                                message:
-                                    '${trace['name']} · ${statusLabel(trace['status'] as String?)}',
-                                child: DecoratedBox(
-                                  decoration: BoxDecoration(
-                                    color: color(trace['status'] as String?),
-                                    borderRadius: BorderRadius.circular(3),
-                                  ),
-                                ),
-                              ),
-                            ),
-                        ],
-                      ),
-                    ),
-                  ),
-                ),
-              ],
+    ],
+  );
+
+  Widget _detail(String label, String value) => Column(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      Row(
+        children: [
+          Expanded(
+            child: Text(
+              label,
+              style: const TextStyle(fontSize: 11, color: Colors.grey),
             ),
           ),
-      ],
-    );
-  }
+          IconButton(
+            tooltip: '复制$label',
+            visualDensity: VisualDensity.compact,
+            icon: const Icon(Icons.copy_outlined, size: 14),
+            onPressed: () => Clipboard.setData(ClipboardData(text: value)),
+          ),
+        ],
+      ),
+      Container(
+        width: double.infinity,
+        padding: const EdgeInsets.all(10),
+        color: const Color(0xFFF6F7FB),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxHeight: 220),
+          child: SingleChildScrollView(
+            child: SelectableText(
+              value,
+              style: const TextStyle(fontSize: 11, height: 1.6),
+            ),
+          ),
+        ),
+      ),
+    ],
+  );
 }

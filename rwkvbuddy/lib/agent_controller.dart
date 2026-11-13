@@ -7,13 +7,10 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 typedef Json = Map<String, dynamic>;
 
-const initialRoles = <Json>[
-  {'id': 'coordinator', 'name': '任务协调员', 'duty': '制定分工，组织交付'},
-  {'id': 'operations', 'name': '经营分析师', 'duty': '核对收入、成本与利润'},
-  {'id': 'cash', 'name': '资金分析师', 'duty': '核对已入账收支与对手方'},
-  {'id': 'risk', 'name': '风险审计师', 'duty': '检查异常、遗漏与分析局限'},
-  {'id': 'reviewer', 'name': '质量复核员', 'duty': '检查来源与成果一致性'},
-];
+// The login Keychain supports local macOS builds without a provisioning profile.
+const connectionStorage = FlutterSecureStorage(
+  mOptions: MacOsOptions(useDataProtectionKeyChain: false),
+);
 
 String statusLabel(String? status) =>
     const {
@@ -45,12 +42,13 @@ class AgentController extends ChangeNotifier {
   String _preferencesError = '';
   int _defaultConnectionVersion = 0;
   bool connected = false;
-  final _secureStorage = const FlutterSecureStorage();
+  final _secureStorage = connectionStorage;
   final Map<String, Completer<Json>> _requests = {};
   List<Json> connections = [];
   String activeConnectionId = '';
   bool inputsChanged = false;
   bool busy = false;
+  bool generateFiles = false;
   String error = '';
   String notice = '';
   String workspace = '';
@@ -59,16 +57,11 @@ class AgentController extends ChangeNotifier {
   List<String> selectedFiles = [];
   String dataRoot = '';
   String mode = 'local';
-  String selectedRole = 'operations';
-  String tab = 'activity';
   Json? run;
-  List<Json> roles = initialRoles;
   List<Json> history = [];
   List<Json> events = [];
-  List<Json> artifacts = [];
   List<Json> traces = [];
   List<Json> turns = [];
-  Map<String, Json> tasks = {};
   Json config = {
     'baseUrl': '',
     'model': '',
@@ -81,11 +74,6 @@ class AgentController extends ChangeNotifier {
       mode == 'local' ? '本地演示' : config['name'] as String? ?? '远端模型';
   String get reportPath => run?['reportPath'] as String? ?? '';
   String get runId => run?['id'] as String? ?? '';
-  Json? get selectedArtifact {
-    final matches = artifacts.where((a) => a['roleId'] == selectedRole);
-    return matches.isEmpty ? null : matches.last;
-  }
-
   void update() {
     if (!_disposed) notifyListeners();
   }
@@ -96,6 +84,7 @@ class AgentController extends ChangeNotifier {
     for (final path in [
       ?overridden,
       '$exe${Platform.pathSeparator}agent-service',
+      if (Platform.isMacOS) '$exe/../Resources/agent-service',
       '${Directory.current.path}${Platform.pathSeparator}agent-service',
     ]) {
       if (await File('$path${Platform.pathSeparator}service.mjs').exists()) {
@@ -190,33 +179,22 @@ class AgentController extends ChangeNotifier {
       case 'run.started':
         run = Map<String, dynamic>.from(payload['run'] as Map);
         events = [];
-        artifacts = [];
         traces = [];
-        tasks = {};
-        roles = _maps(run!['roles']);
         busy = true;
         error = '';
-        tab = 'chat';
       case 'run.loaded':
         final loaded = Map<String, dynamic>.from(payload['run'] as Map);
         run = loaded;
-        roles = _maps(loaded['roles']);
         events = _maps(loaded['events']);
-        artifacts = _maps(loaded['artifacts']);
         traces = _maps(loaded['traces']);
         turns = _maps(payload['turns']);
         inputsChanged = false;
-        tasks = (loaded['tasks'] as Map).map(
-          (key, value) =>
-              MapEntry('$key', Map<String, dynamic>.from(value as Map)),
-        );
         workspace = loaded['workspace'] as String;
         sourceMode = loaded['sourceMode'] as String? ?? 'directory';
         selectedFiles = List<String>.from(
           loaded['selectedFiles'] as List? ?? [],
         );
         error = loaded['error'] as String? ?? '';
-        tab = 'chat';
       case 'trace.started':
       case 'trace.finished':
         final trace = Map<String, dynamic>.from(payload['trace'] as Map);
@@ -230,23 +208,21 @@ class AgentController extends ChangeNotifier {
         final index = traces.indexWhere((item) => item['id'] == payload['id']);
         if (index >= 0) traces[index].addAll(payload);
       case 'plan.created':
-        roles = _maps(payload['roles']);
         run?['template'] = payload['template'];
       case 'input.completed':
         run?['attachments'] = payload['attachments'];
-      case 'task.state_changed':
-        tasks[payload['roleId'] as String] = payload;
-      case 'artifact.created':
-        artifacts.add(payload);
+      case 'files.created':
+        run?['deliverables'] = payload['files'];
       case 'run.error':
         error = payload['message'] as String;
       case 'run.finished':
         run?.addAll(payload);
         busy = false;
-        if (tab != 'activity') tab = 'chat';
         error = payload['error'] as String? ?? '';
       case 'report.exported':
         notice = '报告已保存到 ${payload['path']}';
+      case 'file.exported':
+        notice = '成果文件已保存到 ${payload['path']}';
       case 'trace.exported':
         notice = '执行轨迹已保存到 ${payload['path']}';
       case 'service.error':
@@ -277,6 +253,11 @@ class AgentController extends ChangeNotifier {
 
   void start(String question) {
     if (busy || question.trim().isEmpty) return;
+    if (generateFiles && mode == 'local') {
+      error = '生成文件需要远端模型，请先启用千问连接';
+      update();
+      return;
+    }
     if (sourceMode == 'files' && selectedFiles.isEmpty) {
       error = '请先添加文件或选择资料目录';
       update();
@@ -286,7 +267,13 @@ class AgentController extends ChangeNotifier {
     notice = '';
     busy = true;
     final parentRunId = runId;
-    if (run != null) turns.add(Map<String, dynamic>.from(run!));
+    if (run != null) {
+      turns.add({
+        ...run!,
+        'traces': List<Json>.from(traces),
+        'events': List<Json>.from(events),
+      });
+    }
     final reuse = parentRunId.isNotEmpty && !inputsChanged;
     final actualSource = sourceMode == 'files'
         ? 'files'
@@ -294,8 +281,6 @@ class AgentController extends ChangeNotifier {
         ? 'text'
         : 'directory';
     run = null;
-    tasks = {};
-    artifacts = [];
     events = [];
     traces = [];
     send({
@@ -307,6 +292,7 @@ class AgentController extends ChangeNotifier {
       'reuseInputs': reuse,
       'selectedFiles': List<String>.from(selectedFiles),
       'mode': mode,
+      'outputMode': generateFiles ? 'files' : 'auto',
       'config': config,
     });
     inputsChanged = false;
@@ -322,14 +308,11 @@ class AgentController extends ChangeNotifier {
     if (busy) return;
     run = null;
     events = [];
-    artifacts = [];
     traces = [];
     turns = [];
-    tasks = {};
-    roles = initialRoles;
     error = '';
     notice = '';
-    tab = 'activity';
+    generateFiles = false;
     sourceMode = 'directory';
     workspace = '';
     selectedFiles = [];
@@ -345,17 +328,6 @@ class AgentController extends ChangeNotifier {
       inputsChanged = true;
       update();
     }
-  }
-
-  void selectRole(String id) {
-    selectedRole = id;
-    tab = 'expert';
-    update();
-  }
-
-  void setTab(String value) {
-    tab = value;
-    update();
   }
 
   void setWorkspace(String value) {

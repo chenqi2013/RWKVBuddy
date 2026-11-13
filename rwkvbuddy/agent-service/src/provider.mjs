@@ -52,6 +52,7 @@ export class Provider {
         throw new Error(`模型服务 HTTP ${response.status}，请检查服务协议、模型和凭据。`);
       }
       let text = '';
+      let finishReason = '';
       const consume = (line) => {
         const raw = line.trim().replace(/^data:\s*/, '');
         if (!raw || /^(?:event|id|retry):/.test(raw) || raw.startsWith(':') || raw === '[DONE]') return;
@@ -59,6 +60,7 @@ export class Provider {
         if (chunk.error) throw new Error('模型服务返回错误');
         for (const choice of chunk.choices || []) {
           if (Number(choice.index ?? 0) !== 0) throw new Error('模型返回无效会话索引');
+          if (choice.finish_reason) finishReason = choice.finish_reason;
           const piece = choice.delta?.content || choice.message?.content || choice.text || '';
           text += piece;
           if (text.length > 64000) throw new Error('模型输出超过限制');
@@ -87,12 +89,17 @@ export class Provider {
         } finally { await reader.cancel().catch(() => {}); }
       }
       checkAbort(signal);
+      if (finishReason === 'length') {
+        const error = new Error('模型输出达到 Token 上限，回答被截断；请缩短回答或提高输出上限。');
+        error.code = 'MODEL_OUTPUT_TRUNCATED';
+        throw error;
+      }
       const cleaned = text.trim().replace(/^```(?:json)?\s*/, '').replace(/```\s*$/, '');
       let parsed;
-      try { parsed = JSON.parse(cleaned); } catch { throw new Error('模型未返回有效 JSON，未将草稿作为专家成果。'); }
+      try { parsed = JSON.parse(cleaned); } catch { throw new Error('模型未返回有效 JSON，未将未完成的响应作为结果。'); }
       if (parsed.name === 'submit') parsed = parsed.arguments?.answer;
-      if (typeof parsed === 'string') { try { parsed = JSON.parse(parsed); } catch { throw new Error('专家提交内容不是结构化 JSON'); } }
-      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('专家提交内容格式错误');
+      if (typeof parsed === 'string') { try { parsed = JSON.parse(parsed); } catch { throw new Error('模型提交内容不是结构化 JSON'); } }
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('模型提交内容格式错误');
       return parsed;
     }, signal);
   }

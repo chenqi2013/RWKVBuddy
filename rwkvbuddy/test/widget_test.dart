@@ -44,6 +44,36 @@ void main() {
     },
   );
   testWidgets(
+    'file generation can be selected and actual generated files remain downloadable in history',
+    (tester) async {
+      final controller = AgentController(autoConnect: false);
+      addTearDown(controller.dispose);
+      tester.view.physicalSize = const Size(600, 800);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      await tester.pumpWidget(MyApp(controller: controller));
+      await tester.tap(find.byKey(const Key('generate-files')));
+      await tester.pump();
+      expect(controller.generateFiles, isTrue);
+      controller.run = {
+        'id': 'history',
+        'question': '修改文档',
+        'status': 'completed',
+        'answer': '已生成新副本。',
+        'deliverables': [
+          {'id': 'generated', 'name': '修改后的合同.docx', 'bytes': 4096},
+        ],
+      };
+      controller.update();
+      await tester.pump();
+      expect(find.text('修改后的合同.docx'), findsOneWidget);
+      expect(find.text('下载'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
     'file picker adds and deduplicates attachments; removal and cancellation preserve selection',
     (tester) async {
       final originalPicker = FileSelectorPlatform.instance;
@@ -111,7 +141,7 @@ void main() {
       addTearDown(tester.view.resetDevicePixelRatio);
       await tester.pumpWidget(MyApp(controller: controller));
       expect(find.text('你的专家团队'), findsNothing);
-      expect(find.text('开始协作'), findsOneWidget);
+      expect(find.text('开始处理'), findsOneWidget);
       await tester.tap(find.text('经营与资金分析'));
       await tester.pump();
       expect(find.text('分析三家公司的经营与资金情况，指出异常并给我一份报告。'), findsNWidgets(2));
@@ -123,7 +153,7 @@ void main() {
   );
 
   testWidgets(
-    'a failed expert remains visible beside successful artifacts and partial report',
+    'failed tool remains visible alongside partial results without role UI',
     (tester) async {
       final controller = AgentController(autoConnect: false);
       addTearDown(controller.dispose);
@@ -133,23 +163,30 @@ void main() {
       addTearDown(tester.view.resetDevicePixelRatio);
       controller.run = {
         'id': 'example',
-        'question': '检查经营与资金',
+        'question': '处理合同',
         'status': 'partial',
-        'report': '# 部分完成\n资金资料缺失。',
+        'answer': '已读取合同，成果文件生成失败。',
       };
-      controller.tasks = {
-        'operations': {'status': 'verified', 'detail': '经营成果已核对'},
-        'cash': {'status': 'failed', 'detail': '没有资金流水文件'},
-      };
+      controller.traces = [
+        {
+          'id': 'failed',
+          'kind': 'tool',
+          'name': 'files.create',
+          'status': 'failed',
+          'error': '文件格式无效',
+          'input': {'name': '合同.docx'},
+        },
+      ];
       await tester.pumpWidget(MyApp(controller: controller));
       expect(find.text('部分完成'), findsOneWidget);
-      expect(find.text('资金分析师 · 失败'), findsOneWidget);
-      await tester.tap(find.text('资金分析师 · 失败'));
-      await tester.pump();
-      expect(find.text('没有资金流水文件'), findsOneWidget);
-      await tester.tap(find.text('分析报告'));
-      await tester.pump();
-      expect(find.text('资金资料缺失。'), findsOneWidget);
+      expect(find.text('生成成果文件'), findsOneWidget);
+      expect(find.textContaining('文件格式无效'), findsOneWidget);
+      expect(find.text('已读取合同，成果文件生成失败。'), findsOneWidget);
+      for (final oldLabel in ['专家成果', '分析报告', '执行轨迹', '全部角色', '资金分析师']) {
+        expect(find.text(oldLabel), findsNothing);
+      }
+      tester.view.physicalSize = const Size(600, 720);
+      await tester.pumpAndSettle();
       expect(tester.takeException(), isNull);
     },
   );
@@ -192,10 +229,20 @@ void main() {
   );
 
   testWidgets(
-    'trace expands actual input and failure and filters model calls',
+    'process shows file reads and actual tool details without roles or filters',
     (tester) async {
       final controller = AgentController(autoConnect: false);
       addTearDown(controller.dispose);
+      controller.events = [
+        {
+          'type': 'input.file_started',
+          'payload': {'name': '合同.txt'},
+        },
+        {
+          'type': 'input.file_parsed',
+          'payload': {'name': '合同.txt', 'lines': 12},
+        },
+      ];
       controller.traces = [
         {
           'id': 'tool',
@@ -231,21 +278,18 @@ void main() {
           ),
         ),
       );
-      await tester.tap(find.text('资金分析师 · calculator'));
+      await tester.tap(find.text('计算数据'));
       await tester.pumpAndSettle();
       expect(find.textContaining('6*7'), findsOneWidget);
       expect(find.textContaining('42'), findsOneWidget);
-      await tester.tap(find.text('资金分析师 · calculator'));
+      await tester.tap(find.text('计算数据'));
       await tester.pumpAndSettle();
-      await tester.tap(find.text('风险审计师 · rwkv-test'));
+      await tester.tap(find.text('分析与整理'));
       await tester.pumpAndSettle();
       expect(find.text('HTTP 403'), findsOneWidget);
-      await tester.tap(find.text('全部').last);
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('模型请求').last);
-      await tester.pumpAndSettle();
-      expect(find.text('资金分析师 · calculator'), findsNothing);
-      expect(find.text('风险审计师 · rwkv-test'), findsOneWidget);
+      expect(find.text('合同.txt · 已读取 12 行'), findsOneWidget);
+      expect(find.byType(DropdownButtonFormField<String>), findsNothing);
+      expect(find.text('全部角色'), findsNothing);
       expect(tester.takeException(), isNull);
     },
   );

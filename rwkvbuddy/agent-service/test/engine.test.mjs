@@ -3,138 +3,119 @@ import assert from 'node:assert/strict';
 import { mkdtemp, readFile, mkdir, writeFile, cp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve, dirname } from 'node:path';
-import { AgentRun, validateAnalysis, validateArtifact } from '../src/engine.mjs';
+import { AgentRun } from '../src/engine.mjs';
 import { serviceRoot, runLua, Pool } from '../src/runtime.mjs';
 import { scanWorkspace, financeSnapshot } from '../src/workspace.mjs';
 
 async function scratch(t) {
   const path = await mkdtemp(join(tmpdir(), 'rwkvbuddy-test-'));
   t.after(async () => {
-    // Verify the exact allocated directory before recursive Windows cleanup.
     assert.equal(dirname(resolve(path)), resolve(tmpdir()));
     assert.ok(path.split(/[\\/]/).at(-1).startsWith('rwkvbuddy-test-'));
     await rm(path, { recursive: true, force: true });
   });
   return path;
 }
-const question = '分析经营与资金情况，指出异常，给我报告';
-const command = (mode = 'local') => ({ question, mode, workspace: join(serviceRoot, 'fixtures') });
+const command = (mode = 'local') => ({ question: '分析经营与资金情况，指出异常，给我报告', mode, workspace: join(serviceRoot, 'fixtures') });
 
-test('real Windows Lua tools overlap; review consumes published versions; all money fields match', async (t) => {
+test('single local flow persists real reads, Lua calculations and results without synthetic role steps', async (t) => {
   const root = await scratch(t);
   const events = [];
-  const run = new AgentRun(command(), root, (event) => events.push(event));
-  const state = await run.execute();
+  const state = await new AgentRun(command(), root, (event) => events.push(event)).execute();
   assert.equal(state.status, 'completed');
-  assert.equal(state.artifacts.length, 3);
-  assert.equal(state.tasks.reviewer.status, 'verified');
-  assert.deepEqual(new Set(state.review.inputArtifacts), new Set(['operations-v1', 'cash-v1', 'risk-v1']));
-  for (const value of ['450,500.00', '341,250.00', '278,400.00', '56,900.25', '本地规则']) assert.ok(state.report.includes(value));
+  assert.deepEqual(state.roles, []);
+  assert.deepEqual(state.artifacts, []);
+  assert.deepEqual(state.traces.map((trace) => trace.name), ['input.read', 'lua.ledger', 'lua.cash', 'local.analyze']);
+  assert.ok(state.traces.every((trace) => trace.status === 'completed'));
+  for (const value of ['450,500.00', '341,250.00', '278,400.00', '56,900.25']) assert.ok(state.report.includes(value));
+  assert.ok(!state.report.includes('复核通过'));
   assert.equal(await readFile(state.reportPath, 'utf8'), state.report);
-  let active = 0; let peak = 0;
-  for (const event of events) {
-    if (event.type === 'tool.started' && event.payload.name === 'lua.verify') peak = Math.max(peak, ++active);
-    if (event.type === 'tool.finished' && event.payload.name === 'lua.verify') active--;
-  }
-  assert.equal(peak, 2);
-  const firstReview = events.findIndex((e) => e.type === 'review.completed');
-  assert.equal(events.slice(0, firstReview).filter((e) => e.type === 'artifact.created').length, 3);
-  assert.ok(events.every((e, i) => e.seq === i + 1));
+  assert.ok(events.every((event, index) => event.seq === index + 1));
 });
 
-test('missing cash input fails only cash expert and yields transparent partial report', async (t) => {
+test('missing cash input yields available calculations with an explicit partial result', async (t) => {
   const root = await scratch(t);
   const workspace = join(root, '资料 空格');
   await cp(join(serviceRoot, 'fixtures'), workspace, { recursive: true });
-  const cashPath = join(workspace, 'jobs', 'group-cash', 'cash.jsonl');
-  // Exact file deletion, no recursive cleanup of user input.
-  await rm(cashPath);
+  await rm(join(workspace, 'jobs', 'group-cash', 'cash.jsonl'));
   const state = await new AgentRun({ ...command(), workspace }, join(root, 'runs'), () => {}).execute();
   assert.equal(state.status, 'partial');
-  assert.equal(state.tasks.cash.status, 'failed');
-  assert.equal(state.tasks.operations.status, 'verified');
-  assert.ok(state.report.includes('没有 cash.jsonl'));
-  assert.equal(state.artifacts.some((a) => a.roleId === 'cash'), false);
+  assert.ok(state.traces.some((trace) => trace.name === 'lua.ledger'));
+  assert.ok(!state.traces.some((trace) => trace.name === 'lua.cash'));
+  assert.match(state.report, /无法完成资金核算/);
 });
 
-test('RWKV experts are independent; reviewer requests one targeted revision and consumes v2', async (t) => {
+test('model reads actual file content, recovers from a failed calculation, and receives previous context', async (t) => {
   const root = await scratch(t);
-  let reviews = 0;
+  const file = join(root, '客户需求.txt');
+  await writeFile(file, '预算 24680 元\n合同尚未签署');
+  let calls = 0;
   const provider = { generate: async (instruction, payload) => {
-    if (instruction.startsWith('你是任务协调员')) return { answer: '已整合专家成果与复核结论 [E1]' };
-    if (instruction.startsWith('你是质量复核员')) {
-      return ++reviews === 1 ? { approved: false, summary: '经营结论需补充来源说明', issues: [{ taskId: 'operations', reason: '补充口径局限' }] }
-        : { approved: true, summary: '修订后通过', issues: [] };
-    }
-    return { summary: instruction.includes('必须处理') ? '已修订' : '独立专家结论', findings: payload.verifiedFindings };
+    assert.ok(instruction.startsWith('你是文件处理助手'));
+    assert.equal(payload.previousTurn.question, '上轮问题');
+    calls++;
+    if (calls === 1) return { tool: 'read_file', arguments: { evidenceId: payload.evidence[0].id, startLine: 1, lineCount: 2 } };
+    assert.match(payload.toolResults[0].result.text, /24680/);
+    if (calls === 2) return { tool: 'calculator', arguments: { expression: '1/0' } };
+    assert.match(payload.toolResults[1].result.error, /溢出/);
+    if (calls === 3) return { tool: 'calculator', arguments: { expression: '24680*2' } };
+    assert.equal(payload.toolResults[2].result.result, 49360);
+    return { answer: '两份预算为 49360 元，合同尚未签署 [E1]。' };
   } };
   const events = [];
-  const state = await new AgentRun(command('rwkv'), root, (e) => events.push(e), { provider }).execute();
+  const run = new AgentRun({ question: '两份预算合计多少？', sourceMode: 'files', selectedFiles: [file], mode: 'rwkv',
+    context: { question: '上轮问题' }, config: { apiKey: 'private-token' } }, join(root, 'runs'), (event) => events.push(event), { provider });
+  const state = await run.execute();
   assert.equal(state.status, 'completed');
-  assert.equal(state.artifacts.length, 4);
-  assert.equal(state.artifacts.filter((a) => a.roleId === 'cash').length, 1);
-  assert.ok(state.review.inputArtifacts.includes('operations-v2'));
-  assert.ok(!state.review.inputArtifacts.includes('operations-v1'));
-  assert.equal(events.filter((e) => e.type === 'review.requested').length, 1);
-  assert.equal(state.tasks.operations.attempt, 2);
+  assert.equal(calls, 4);
+  assert.match(state.answer, /49360/);
+  assert.ok(events.some((event) => event.type === 'input.file_parsed' && event.payload.lines === 2));
+  const read = state.traces.find((trace) => trace.name === 'read_file');
+  assert.match(read.output, /24680/);
+  assert.equal(state.traces.find((trace) => trace.name === 'calculator').status, 'failed');
+  assert.equal(events.find((event) => event.type === 'trace.started' && event.payload.trace.id === read.id).payload.trace.status, 'running');
+  const saved = await readFile(join(run.directory, 'run.json'), 'utf8');
+  assert.ok(!saved.includes('private-token'));
+  assert.deepEqual(JSON.parse(saved).traces, state.traces);
 });
 
-test('failed model expert is not replaced by local results or marked successful', async (t) => {
+test('failed model request remains failed without replacing its answer with local analysis', async (t) => {
   const root = await scratch(t);
-  const provider = { generate: async (instruction, payload) => {
-    if (instruction.startsWith('你是任务协调员')) return { answer: '可用成果已整合，经营分析失败。' };
-    if (instruction.startsWith('你是质量复核员')) return { approved: true, summary: '已检查可用成果', issues: [] };
-    if (instruction.includes('经营分析师')) throw new Error('injected network failure');
-    return { summary: '有效成果', findings: payload.verifiedFindings };
-  } };
-  const state = await new AgentRun(command('rwkv'), root, () => {}, { provider }).execute();
-  assert.equal(state.status, 'partial');
-  assert.equal(state.tasks.operations.status, 'failed');
-  assert.ok(!state.artifacts.some((a) => a.roleId === 'operations'));
-  assert.ok(state.report.includes('injected network failure'));
+  const provider = { generate: async () => { throw new Error('injected network failure'); } };
+  const state = await new AgentRun({ question: '写一份方案', sourceMode: 'text', mode: 'rwkv' }, root, () => {}, { provider }).execute();
+  assert.equal(state.status, 'failed');
+  assert.equal(state.answer, '');
+  assert.match(state.error, /injected network failure/);
+  assert.equal(state.traces.at(-1).status, 'failed');
 });
 
-test('failed requested revision never approves the superseded expert artifact', async (t) => {
+test('tool call limit terminates a repeated model loop without claiming completion', async (t) => {
   const root = await scratch(t);
-  let reviews = 0;
-  const provider = { generate: async (instruction, payload) => {
-    if (instruction.startsWith('你是任务协调员')) return { answer: '存在未通过复核的成果。' };
-    if (instruction.startsWith('你是质量复核员')) {
-      reviews++;
-      return { approved: false, summary: '需要补充经营口径', issues: [{ taskId: 'operations', reason: '补充来源说明' }] };
-    }
-    if (instruction.includes('必须处理')) throw new Error('revision connection failed');
-    return { summary: '专家初稿', findings: payload.verifiedFindings };
-  } };
-  const state = await new AgentRun(command('rwkv'), root, () => {}, { provider }).execute();
-  assert.equal(reviews, 1);
-  assert.equal(state.status, 'partial');
-  assert.equal(state.review.approved, false);
-  assert.equal(state.tasks.operations.status, 'failed');
-  assert.equal(state.tasks.reviewer.status, 'failed');
-  assert.ok(state.artifacts.some((artifact) => artifact.id === 'operations-v1'));
-  assert.ok(!state.artifacts.some((artifact) => artifact.id === 'operations-v2'));
-  assert.ok(state.report.includes('未通过复核'));
-  assert.ok(!state.report.includes('· 复核通过'));
+  let calls = 0;
+  const provider = { generate: async () => { calls++; return { tool: 'calculator', arguments: { expression: '6*7' } }; } };
+  const state = await new AgentRun({ question: '计算', sourceMode: 'text', mode: 'rwkv' }, root, () => {}, { provider }).execute();
+  assert.equal(state.status, 'failed');
+  assert.equal(calls, 7);
+  assert.equal(state.traces.filter((trace) => trace.name === 'calculator').length, 6);
+  assert.match(state.error, /调用上限/);
 });
 
-test('cancellation aborts active and queued model work without publishing late artifacts', async (t) => {
+test('cancellation aborts active model work and persists a cancelled step', async (t) => {
   const root = await scratch(t);
-  let requests = 0;
   let ready;
   const waiting = new Promise((done) => { ready = done; });
   const provider = { generate: (_instruction, _payload, signal) => new Promise((_resolve, reject) => {
-    if (++requests === 3) ready();
     signal.addEventListener('abort', () => reject(new DOMException('cancelled', 'AbortError')), { once: true });
+    ready();
   }) };
-  const run = new AgentRun(command('rwkv'), root, () => {}, { provider });
+  const run = new AgentRun({ question: '分析', sourceMode: 'text', mode: 'rwkv' }, root, () => {}, { provider });
   const completion = run.execute();
   await waiting;
   run.cancel();
   const state = await completion;
   assert.equal(state.status, 'cancelled');
-  assert.equal(state.artifacts.length, 0);
-  assert.ok(['operations', 'cash', 'risk'].every((id) => state.tasks[id].status === 'cancelled'));
+  assert.deepEqual(state.deliverables, []);
+  assert.equal(state.traces.at(-1).status, 'cancelled');
 });
 
 test('Lua cancellation terminates a running process and releases pool resource', async () => {
@@ -165,9 +146,7 @@ test('cancelled queue entry never executes; concurrent model pool honors configu
   release(); await held;
 });
 
-test('citations and input snapshot versions must match; malformed finance input is rejected', async (t) => {
-  assert.throws(() => validateAnalysis({ summary: 'x', findings: [{ text: 'x', evidenceIds: ['invented'] }] }, [{ id: 'E1' }]));
-  assert.throws(() => validateArtifact({ snapshotHash: 'old' }, 'new', []), /不同版本/);
+test('malformed finance input is rejected before running Lua', async (t) => {
   const root = await scratch(t);
   await mkdir(join(root, 'jobs', 'co-x'), { recursive: true });
   await mkdir(join(root, 'shared'));
@@ -177,48 +156,32 @@ test('citations and input snapshot versions must match; malformed finance input 
   assert.throws(() => financeSnapshot(snapshot), /无效数字/);
 });
 
-test('document-only workspaces use distinct research/technical/risk roles', async (t) => {
+test('document-only workspace produces direct local results without fixed expert roles', async (t) => {
   const root = await scratch(t);
   const workspace = join(root, '文档');
   await mkdir(workspace);
   await writeFile(join(workspace, 'README.md'), '# 产品计划\n这是一个本地桌面分析工具。\nTODO: 补充部署说明。');
   const state = await new AgentRun({ question: '研究这个目录', mode: 'local', workspace }, join(root, 'runs'), () => {}).execute();
   assert.equal(state.status, 'completed');
-  assert.equal(state.roles.find((r) => r.id === 'operations').name, '资料研究员');
-  assert.ok(state.report.includes('TODO'));
+  assert.deepEqual(state.roles, []);
+  assert.match(state.report, /TODO/);
 });
 
-test('expert consumes real tool results; model/tool traces persist outcomes and synthesis failure is partial', async (t) => {
+test('token truncation retries once with compact output while preserving the failed request record', async (t) => {
   const root = await scratch(t);
-  const file = join(root, '客户需求.txt');
-  await writeFile(file, '预算 24680 元\n合同尚未签署');
-  const seen = new Set();
-  let contextObserved = false;
-  const provider = { generate: async (instruction, payload) => {
-    if (instruction.startsWith('你是质量复核员')) return { approved: true, summary: '来源匹配', issues: [] };
-    if (instruction.startsWith('你是任务协调员')) throw new Error('synthesis failed');
-    contextObserved ||= payload.previousTurn?.question === '上轮问题';
-    if (instruction.includes('资料分析师') && !seen.has('read')) {
-      seen.add('read'); return { tool: 'read_file', arguments: { evidenceId: payload.evidence[0].id, startLine: 1, lineCount: 2 } };
-    }
-    if (instruction.includes('资料分析师')) assert.match(payload.toolResults[0].result.text, /24680/);
-    return { summary: '已读取资料', findings: payload.verifiedFindings };
+  let calls = 0;
+  const provider = { generate: async (instruction) => {
+    if (++calls === 1) throw Object.assign(new Error('输出被截断'), { code: 'MODEL_OUTPUT_TRUNCATED' });
+    assert.match(instruction, /800 字/);
+    return { answer: '工程功能和技术栈概述。' };
   } };
-  const events = [];
-  const run = new AgentRun({ question: '指出风险', sourceMode: 'files', selectedFiles: [file], workspace: '', mode: 'rwkv',
-    context: { question: '上轮问题', report: '上轮结论' }, config: { apiKey: 'private-token' } }, join(root, 'runs'), (event) => events.push(event), { provider });
-  const state = await run.execute();
-  assert.ok(contextObserved);
-  assert.equal(state.status, 'partial');
-  assert.match(state.report, /状态：部分完成/);
-  assert.match(state.answer, /synthesis failed/);
-  const read = state.traces.find((item) => item.name === 'read_file');
-  assert.equal(read.status, 'completed');
-  assert.match(read.output, /24680/);
-  assert.ok(read.durationMs >= 0 && read.finishedAt);
-  assert.equal(state.traces.find((item) => item.roleId === 'coordinator' && item.kind === 'model').status, 'failed');
-  assert.equal(events.find((item) => item.type === 'trace.started' && item.payload.trace.id === read.id).payload.trace.status, 'running');
-  const saved = await readFile(join(run.directory, 'run.json'), 'utf8');
-  assert.ok(!saved.includes('private-token'));
-  assert.deepEqual(JSON.parse(saved).traces, state.traces);
+  const state = await new AgentRun({ question: '介绍工程', sourceMode: 'text', mode: 'rwkv' }, root, () => {}, { provider }).execute();
+  assert.equal(state.status, 'completed', state.error);
+  assert.equal(calls, 2);
+  assert.deepEqual(state.traces.filter((trace) => trace.kind === 'model').map((trace) => trace.status), ['failed', 'completed']);
+  calls = 0;
+  const broken = { generate: async () => { calls++; throw Object.assign(new Error('输出被截断'), { code: 'MODEL_OUTPUT_TRUNCATED' }); } };
+  const failed = await new AgentRun({ question: '介绍工程', sourceMode: 'text', mode: 'rwkv' }, root, () => {}, { provider: broken }).execute();
+  assert.equal(failed.status, 'failed');
+  assert.equal(calls, 2);
 });

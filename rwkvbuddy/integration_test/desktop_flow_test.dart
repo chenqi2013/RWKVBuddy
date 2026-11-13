@@ -9,7 +9,6 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
 import 'package:rwkvbuddy/agent_controller.dart';
 import 'package:rwkvbuddy/main.dart';
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 class IntegrationFilePicker extends FileSelectorPlatform {
   IntegrationFilePicker(this.files);
@@ -25,7 +24,7 @@ class IntegrationFilePicker extends FileSelectorPlatform {
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
   testWidgets(
-    'Windows app starts its bundled service and delivers a real multi-role report',
+    'desktop app starts its bundled service and delivers actual process and results',
     (tester) async {
       // Keep the native Windows IME from overwriting injected test text.
       tester.testTextInput.register();
@@ -87,21 +86,26 @@ void main() {
       await screenshot('welcome');
       await tester.tap(find.text('经营与资金分析'));
       await tester.pump();
-      await tester.tap(find.text('开始协作'));
+      await tester.tap(find.text('开始处理'));
       await waitUntil(() => agent.run != null && !agent.busy);
-      expect(agent.run!['status'], 'completed');
-      expect(agent.artifacts.length, 3);
+      expect(agent.run!['status'], 'completed', reason: agent.error);
+      expect(
+        agent.events.where((event) => event['type'] == 'artifact.created'),
+        isEmpty,
+      );
       expect(agent.report, contains('1,070,150.00'));
       expect(agent.report, contains('56,900.25'));
-      expect(agent.tasks['reviewer']!['status'], 'verified');
-      await screenshot('completed-report');
-      await tester.tap(find.text('执行轨迹'));
-      await tester.pump();
       expect(
-        agent.events.where((e) => e['type'] == 'artifact.created').length,
-        3,
+        agent.traces.any((trace) => trace['name'] == 'lua.ledger'),
+        isTrue,
       );
-      await screenshot('collaboration');
+      await screenshot('completed-report');
+      expect(find.text('专家成果'), findsNothing);
+      expect(
+        agent.traces.every((trace) => trace['name'] != 'snapshot.inspect'),
+        isTrue,
+      );
+      await screenshot('process-results');
       final temp = await Directory.systemTemp.createTemp('rwkvbuddy-ui-files-');
       final originalPicker = FileSelectorPlatform.instance;
       addTearDown(() async {
@@ -130,7 +134,7 @@ void main() {
       final input = find.byType(TextField).first;
       await tester.enterText(input, '分析我添加的客户需求和销售数据，指出风险。');
       await screenshot('selected-files');
-      await tester.tap(find.text('开始协作'));
+      await tester.tap(find.text('开始处理'));
       await waitUntil(() => agent.run != null && !agent.busy);
       expect(agent.run!['status'], 'completed', reason: agent.error);
       expect(agent.report, contains('24680'));
@@ -193,7 +197,7 @@ void main() {
         ).readAsString();
         expect(publicFile, isNot(contains('smoke-private-token')));
         expect(publicFile, isNot(contains('smoke-private-header')));
-        final secret = await const FlutterSecureStorage().read(
+        final secret = await connectionStorage.read(
           key: 'rwkvbuddy.connection.$profileId',
         );
         expect(jsonDecode(secret!)['apiKey'], 'smoke-private-token');
