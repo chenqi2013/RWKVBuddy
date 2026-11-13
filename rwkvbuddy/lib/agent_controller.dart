@@ -1,0 +1,627 @@
+import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
+
+import 'package:flutter/foundation.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+
+typedef Json = Map<String, dynamic>;
+
+const initialRoles = <Json>[
+  {'id': 'coordinator', 'name': '任务协调员', 'duty': '制定分工，组织交付'},
+  {'id': 'operations', 'name': '经营分析师', 'duty': '核对收入、成本与利润'},
+  {'id': 'cash', 'name': '资金分析师', 'duty': '核对已入账收支与对手方'},
+  {'id': 'risk', 'name': '风险审计师', 'duty': '检查异常、遗漏与分析局限'},
+  {'id': 'reviewer', 'name': '质量复核员', 'duty': '检查来源与成果一致性'},
+];
+
+String statusLabel(String? status) =>
+    const {
+      'running': '进行中',
+      'waiting_dependency': '等待交接',
+      'waiting_model': '等待模型',
+      'waiting_tool': '等待工具',
+      'submitted': '已提交',
+      'verified': '已复核',
+      'failed': '失败',
+      'cancelled': '已取消',
+      'blocked': '无法继续',
+      'completed': '已完成',
+      'partial': '部分完成',
+      'interrupted': '已中断',
+      'queued': '待开始',
+    }[status] ??
+    '待开始';
+
+class AgentController extends ChangeNotifier {
+  AgentController({bool autoConnect = true, this.serviceEnvironment}) {
+    if (autoConnect) unawaited(connect());
+  }
+  final Map<String, String>? serviceEnvironment;
+  Process? _process;
+  bool _disposed = false;
+  bool _connecting = false;
+  Future<void> _preferencesWrite = Future<void>.value();
+  String _preferencesError = '';
+  int _defaultConnectionVersion = 0;
+  bool connected = false;
+  final _secureStorage = const FlutterSecureStorage();
+  final Map<String, Completer<Json>> _requests = {};
+  List<Json> connections = [];
+  String activeConnectionId = '';
+  bool inputsChanged = false;
+  bool busy = false;
+  String error = '';
+  String notice = '';
+  String workspace = '';
+  String sampleWorkspace = '';
+  String sourceMode = 'directory';
+  List<String> selectedFiles = [];
+  String dataRoot = '';
+  String mode = 'local';
+  String selectedRole = 'operations';
+  String tab = 'activity';
+  Json? run;
+  List<Json> roles = initialRoles;
+  List<Json> history = [];
+  List<Json> events = [];
+  List<Json> artifacts = [];
+  List<Json> traces = [];
+  List<Json> turns = [];
+  Map<String, Json> tasks = {};
+  Json config = {
+    'baseUrl': '',
+    'model': '',
+    'protocol': 'chat',
+    'concurrency': 2,
+  };
+  String get report => run?['report'] as String? ?? '';
+  String get answer => run?['answer'] as String? ?? '';
+  String get connectionLabel =>
+      mode == 'local' ? '本地演示' : config['name'] as String? ?? '远端模型';
+  String get reportPath => run?['reportPath'] as String? ?? '';
+  String get runId => run?['id'] as String? ?? '';
+  Json? get selectedArtifact {
+    final matches = artifacts.where((a) => a['roleId'] == selectedRole);
+    return matches.isEmpty ? null : matches.last;
+  }
+
+  void update() {
+    if (!_disposed) notifyListeners();
+  }
+
+  Future<String> _findService() async {
+    final overridden = Platform.environment['RWKVBUDDY_SERVICE_DIR'];
+    final exe = File(Platform.resolvedExecutable).parent.path;
+    for (final path in [
+      ?overridden,
+      '$exe${Platform.pathSeparator}agent-service',
+      '${Directory.current.path}${Platform.pathSeparator}agent-service',
+    ]) {
+      if (await File('$path${Platform.pathSeparator}service.mjs').exists()) {
+        return path;
+      }
+    }
+    throw const FileSystemException('找不到本地执行服务，请从项目目录运行，或使用完整发布目录');
+  }
+
+  Future<void> connect() async {
+    if (_connecting || connected || _disposed) return;
+    _connecting = true;
+    error = '';
+    update();
+    try {
+      final root = await _findService();
+      final bundled =
+          '$root${Platform.pathSeparator}runtime${Platform.pathSeparator}${Platform.isWindows ? 'node.exe' : 'node'}';
+      final node = await File(bundled).exists() ? bundled : 'node';
+      final process = await Process.start(
+        node,
+        ['$root${Platform.pathSeparator}service.mjs'],
+        workingDirectory: root,
+        environment: serviceEnvironment,
+      );
+      if (_disposed) {
+        process.kill();
+        return;
+      }
+      _process = process;
+      process.stdout
+          .transform(utf8.decoder)
+          .transform(const LineSplitter())
+          .listen(
+            (line) {
+              try {
+                _event(Map<String, dynamic>.from(jsonDecode(line) as Map));
+              } catch (_) {
+                error = '本地服务返回了无法识别的数据';
+                update();
+              }
+            },
+            onError: (_) {
+              error = '本地服务连接中断';
+              update();
+            },
+          );
+      process.stderr.transform(utf8.decoder).listen((_) {});
+      unawaited(
+        process.exitCode.then((code) {
+          if (_disposed || _process != process) return;
+          connected = false;
+          busy = false;
+          _process = null;
+          error = '本地执行服务已退出（$code），可点击重新连接。';
+          update();
+        }),
+      );
+    } catch (exception) {
+      error = '无法启动本地服务：$exception';
+    } finally {
+      _connecting = false;
+      update();
+    }
+  }
+
+  void _event(Json event) {
+    final payload = Map<String, dynamic>.from(event['payload'] as Map? ?? {});
+    switch (event['type']) {
+      case 'connection.result':
+        final id = payload['requestId'] as String?;
+        _requests.remove(id)?.complete(payload);
+      case 'service.ready':
+        sampleWorkspace = payload['sampleWorkspace'] as String;
+        dataRoot = payload['dataRoot'] as String;
+        config['baseUrl'] = payload['baseUrl'];
+        config['model'] = payload['model'];
+        history = _maps(payload['runs']);
+        unawaited(
+          _loadPreferences().then((_) async {
+            if (payload['defaultConnection'] is Map) {
+              await installDefaultConnection(
+                Map<String, dynamic>.from(payload['defaultConnection'] as Map),
+              );
+            }
+            connected = true;
+            update();
+          }),
+        );
+      case 'history':
+        history = _maps(payload['runs']);
+      case 'run.started':
+        run = Map<String, dynamic>.from(payload['run'] as Map);
+        events = [];
+        artifacts = [];
+        traces = [];
+        tasks = {};
+        roles = _maps(run!['roles']);
+        busy = true;
+        error = '';
+        tab = 'chat';
+      case 'run.loaded':
+        final loaded = Map<String, dynamic>.from(payload['run'] as Map);
+        run = loaded;
+        roles = _maps(loaded['roles']);
+        events = _maps(loaded['events']);
+        artifacts = _maps(loaded['artifacts']);
+        traces = _maps(loaded['traces']);
+        turns = _maps(payload['turns']);
+        inputsChanged = false;
+        tasks = (loaded['tasks'] as Map).map(
+          (key, value) =>
+              MapEntry('$key', Map<String, dynamic>.from(value as Map)),
+        );
+        workspace = loaded['workspace'] as String;
+        sourceMode = loaded['sourceMode'] as String? ?? 'directory';
+        selectedFiles = List<String>.from(
+          loaded['selectedFiles'] as List? ?? [],
+        );
+        error = loaded['error'] as String? ?? '';
+        tab = 'chat';
+      case 'trace.started':
+      case 'trace.finished':
+        final trace = Map<String, dynamic>.from(payload['trace'] as Map);
+        final index = traces.indexWhere((item) => item['id'] == trace['id']);
+        if (index < 0) {
+          traces.add(trace);
+        } else {
+          traces[index] = trace;
+        }
+      case 'trace.delta':
+        final index = traces.indexWhere((item) => item['id'] == payload['id']);
+        if (index >= 0) traces[index].addAll(payload);
+      case 'plan.created':
+        roles = _maps(payload['roles']);
+        run?['template'] = payload['template'];
+      case 'input.completed':
+        run?['attachments'] = payload['attachments'];
+      case 'task.state_changed':
+        tasks[payload['roleId'] as String] = payload;
+      case 'artifact.created':
+        artifacts.add(payload);
+      case 'run.error':
+        error = payload['message'] as String;
+      case 'run.finished':
+        run?.addAll(payload);
+        busy = false;
+        if (tab != 'activity') tab = 'chat';
+        error = payload['error'] as String? ?? '';
+      case 'report.exported':
+        notice = '报告已保存到 ${payload['path']}';
+      case 'trace.exported':
+        notice = '执行轨迹已保存到 ${payload['path']}';
+      case 'service.error':
+        error = payload['message'] as String;
+        if (run == null || run!['status'] != 'running') busy = false;
+    }
+    if (event['runId'] == runId &&
+        event['type'] != 'run.started' &&
+        event['type'] != 'trace.delta') {
+      events.add(event);
+      if (events.length > 400) events.removeAt(0);
+    }
+    update();
+  }
+
+  static List<Json> _maps(dynamic value) => (value as List? ?? [])
+      .map((v) => Map<String, dynamic>.from(v as Map))
+      .toList();
+  void send(Json command) {
+    if (!connected || _process == null) {
+      error = '本地服务尚未连接';
+      busy = false;
+      update();
+      return;
+    }
+    _process!.stdin.writeln(jsonEncode(command));
+  }
+
+  void start(String question) {
+    if (busy || question.trim().isEmpty) return;
+    if (sourceMode == 'files' && selectedFiles.isEmpty) {
+      error = '请先添加文件或选择资料目录';
+      update();
+      return;
+    }
+    error = '';
+    notice = '';
+    busy = true;
+    final parentRunId = runId;
+    if (run != null) turns.add(Map<String, dynamic>.from(run!));
+    final reuse = parentRunId.isNotEmpty && !inputsChanged;
+    final actualSource = sourceMode == 'files'
+        ? 'files'
+        : workspace.isEmpty
+        ? 'text'
+        : 'directory';
+    run = null;
+    tasks = {};
+    artifacts = [];
+    events = [];
+    traces = [];
+    send({
+      'type': 'run',
+      'question': question.trim(),
+      'workspace': workspace,
+      'sourceMode': actualSource,
+      if (parentRunId.isNotEmpty) 'parentRunId': parentRunId,
+      'reuseInputs': reuse,
+      'selectedFiles': List<String>.from(selectedFiles),
+      'mode': mode,
+      'config': config,
+    });
+    inputsChanged = false;
+    update();
+  }
+
+  void cancel() => send({'type': 'cancel', 'runId': runId});
+  void load(String id) {
+    if (!busy) send({'type': 'load', 'runId': id});
+  }
+
+  void newTask() {
+    if (busy) return;
+    run = null;
+    events = [];
+    artifacts = [];
+    traces = [];
+    turns = [];
+    tasks = {};
+    roles = initialRoles;
+    error = '';
+    notice = '';
+    tab = 'activity';
+    sourceMode = 'directory';
+    workspace = '';
+    selectedFiles = [];
+    inputsChanged = false;
+    update();
+  }
+
+  void useSample() {
+    if (!busy) {
+      workspace = sampleWorkspace;
+      sourceMode = 'directory';
+      selectedFiles = [];
+      inputsChanged = true;
+      update();
+    }
+  }
+
+  void selectRole(String id) {
+    selectedRole = id;
+    tab = 'expert';
+    update();
+  }
+
+  void setTab(String value) {
+    tab = value;
+    update();
+  }
+
+  void setWorkspace(String value) {
+    if (busy) return;
+    workspace = value;
+    sourceMode = 'directory';
+    selectedFiles = [];
+    inputsChanged = true;
+    update();
+    unawaited(savePreferences());
+  }
+
+  void addFiles(Iterable<String> paths) {
+    if (busy) return;
+    final next = <String>[];
+    final seen = <String>{};
+    for (final path in [...selectedFiles, ...paths]) {
+      final key = Platform.isWindows ? path.toLowerCase() : path;
+      if (seen.add(key)) next.add(path);
+    }
+    if (next.length > 20) {
+      error = '每次最多添加 20 个文件，请移除部分文件后重试';
+      update();
+      return;
+    }
+    if (next.isEmpty) return;
+    selectedFiles = next;
+    inputsChanged = true;
+    sourceMode = 'files';
+    error = '';
+    update();
+  }
+
+  void removeFile(String path) {
+    if (busy) return;
+    selectedFiles = selectedFiles.where((item) => item != path).toList();
+    inputsChanged = true;
+    update();
+  }
+
+  void setMode(String value) {
+    mode = value;
+    update();
+    unawaited(savePreferences());
+  }
+
+  void configure(Json value) {
+    config = {...config, ...value};
+    update();
+    unawaited(savePreferences());
+  }
+
+  Future<Json> testConnection(Json draft, {bool generate = false}) async {
+    if (!connected) return {'ok': false, 'summary': '本地执行服务尚未连接'};
+    final id = DateTime.now().microsecondsSinceEpoch.toString();
+    final completer = Completer<Json>();
+    _requests[id] = completer;
+    send({
+      'type': 'connection.test',
+      'requestId': id,
+      'config': draft,
+      'generate': generate,
+    });
+    try {
+      return await completer.future.timeout(const Duration(seconds: 30));
+    } catch (_) {
+      return {'ok': false, 'summary': '连接测试超时，请检查网络与地址'};
+    } finally {
+      _requests.remove(id);
+    }
+  }
+
+  void activateConnection(String id) {
+    if (busy) return;
+    final profile = connections.firstWhere((item) => item['id'] == id);
+    activeConnectionId = id;
+    config = {...profile};
+    mode = 'rwkv';
+    update();
+    unawaited(savePreferences());
+  }
+
+  Future<void> saveConnection(Json profile, {bool activate = true}) async {
+    if (busy) return;
+    final value = Map<String, dynamic>.from(profile);
+    value['id'] ??= DateTime.now().microsecondsSinceEpoch.toString();
+    final id = value['id'] as String;
+    final index = connections.indexWhere((item) => item['id'] == id);
+    if (index < 0) {
+      connections.add(value);
+    } else {
+      connections[index] = value;
+    }
+    if (activate) {
+      activeConnectionId = id;
+      config = {...value};
+      mode = 'rwkv';
+    }
+    await savePreferences();
+    if (_preferencesError.isNotEmpty) throw StateError(_preferencesError);
+    update();
+  }
+
+  Future<void> installDefaultConnection(Json profile) async {
+    final version = (profile['version'] as num? ?? 1).toInt();
+    if (_defaultConnectionVersion >= version) return;
+    final value = Map<String, dynamic>.from(profile);
+    final index = connections.indexWhere((item) => item['id'] == value['id']);
+    if (index < 0) {
+      connections.add(value);
+    } else {
+      connections[index] = value;
+    }
+    activeConnectionId = value['id'] as String;
+    config = {...value};
+    mode = 'rwkv';
+    _defaultConnectionVersion = version;
+    await savePreferences();
+    update();
+  }
+
+  Future<void> deleteConnection(String id) async {
+    if (busy) return;
+    connections.removeWhere((item) => item['id'] == id);
+    try {
+      await _secureStorage.delete(key: 'rwkvbuddy.connection.$id');
+    } catch (_) {}
+    if (activeConnectionId == id) {
+      activeConnectionId = '';
+      config = {
+        'baseUrl': '',
+        'model': '',
+        'protocol': 'chat',
+        'concurrency': 2,
+      };
+      mode = 'local';
+    }
+    await savePreferences();
+    update();
+  }
+
+  File? get _preferences => dataRoot.isEmpty
+      ? null
+      : File(
+          '${Directory(dataRoot).parent.path}${Platform.pathSeparator}settings.json',
+        );
+  Future<void> _loadPreferences() async {
+    try {
+      if (await _preferences?.exists() ?? false) {
+        final saved = Map<String, dynamic>.from(
+          jsonDecode(await _preferences!.readAsString()) as Map,
+        );
+        _defaultConnectionVersion =
+            (saved['defaultConnectionVersion'] as num? ?? 0).toInt();
+        if (saved['config'] is Map) {
+          config.addAll(Map<String, dynamic>.from(saved['config'] as Map));
+        }
+        connections = _maps(saved['connections']);
+        for (final profile in connections) {
+          try {
+            final secret = await _secureStorage.read(
+              key: 'rwkvbuddy.connection.${profile['id']}',
+            );
+            if (secret != null) {
+              profile.addAll(
+                Map<String, dynamic>.from(jsonDecode(secret) as Map),
+              );
+            }
+          } catch (_) {
+            notice = '部分连接凭据无法从系统凭据库读取，请重新填写';
+          }
+        }
+        activeConnectionId = saved['activeConnectionId'] as String? ?? '';
+        if (connections.isEmpty &&
+            (config['baseUrl'] as String? ?? '').isNotEmpty) {
+          connections = [
+            {'id': 'migrated', 'name': '默认远端连接', ...config},
+          ];
+          activeConnectionId = 'migrated';
+        }
+        final active = connections.where(
+          (item) => item['id'] == activeConnectionId,
+        );
+        if (active.isNotEmpty) config = {...active.first};
+        if (['rwkv', 'local'].contains(saved['mode'])) {
+          mode = saved['mode'] as String;
+        }
+        final path = saved['workspace'] as String?;
+        if (path != null && await Directory(path).exists()) workspace = path;
+        update();
+      }
+    } catch (_) {
+      /* Invalid preferences never prevent startup. */
+    }
+  }
+
+  Future<void> savePreferences() {
+    final file = _preferences;
+    final safe = Map<String, dynamic>.from(config)
+      ..removeWhere(
+        (key, _) =>
+            ['apiKey', 'accessId', 'accessSecret', 'headers'].contains(key),
+      );
+    final profiles = connections
+        .map((profile) => Map<String, dynamic>.from(profile))
+        .toList();
+    final publicProfiles = profiles
+        .map(
+          (profile) => Map<String, dynamic>.from(profile)
+            ..removeWhere(
+              (key, _) => [
+                'apiKey',
+                'accessId',
+                'accessSecret',
+                'headers',
+              ].contains(key),
+            ),
+        )
+        .toList();
+    final content = jsonEncode({
+      'workspace': workspace,
+      'mode': mode,
+      'config': safe,
+      'connections': publicProfiles,
+      'activeConnectionId': activeConnectionId,
+      'defaultConnectionVersion': _defaultConnectionVersion,
+    });
+    return _preferencesWrite = _preferencesWrite.then((_) async {
+      try {
+        _preferencesError = '';
+        for (final profile in profiles) {
+          final secret = {
+            for (final key in ['apiKey', 'accessId', 'accessSecret', 'headers'])
+              key: profile[key],
+          };
+          await _secureStorage.write(
+            key: 'rwkvbuddy.connection.${profile['id']}',
+            value: jsonEncode(secret),
+          );
+        }
+        await file?.writeAsString(content);
+      } catch (_) {
+        notice = '连接配置未能完整保存，请检查系统凭据库与数据目录权限';
+        _preferencesError = notice;
+        update();
+      }
+    });
+  }
+
+  Future<void> shutdown() async {
+    final process = _process;
+    if (process == null) return;
+    _process = null;
+    try {
+      process.stdin.writeln(jsonEncode({'type': 'shutdown'}));
+      await process.stdin.flush();
+      await process.exitCode.timeout(const Duration(seconds: 3));
+    } catch (_) {
+      process.kill();
+    }
+  }
+
+  @override
+  void dispose() {
+    _disposed = true;
+    unawaited(shutdown());
+    super.dispose();
+  }
+}

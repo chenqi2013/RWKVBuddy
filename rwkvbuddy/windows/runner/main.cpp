@@ -5,6 +5,25 @@
 #include "flutter_window.h"
 #include "utils.h"
 
+namespace {
+// Keep the handle open for the lifetime of this GUI process. The OS closes it
+// even after an abrupt exit, terminating the inherited Node/Lua process tree.
+HANDLE CreateAgentProcessJob() {
+  HANDLE job = ::CreateJobObjectW(nullptr, nullptr);
+  if (!job) return nullptr;
+  JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits = {};
+  limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+  if (!::SetInformationJobObject(job, JobObjectExtendedLimitInformation,
+                                 &limits, sizeof(limits)) ||
+      !::AssignProcessToJobObject(job, ::GetCurrentProcess())) {
+    ::CloseHandle(job);
+    ::OutputDebugStringW(L"RWKVBuddy: process job unavailable; graceful shutdown remains enabled.\n");
+    return nullptr;
+  }
+  return job;
+}
+}  // namespace
+
 int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
                       _In_ wchar_t *command_line, _In_ int show_command) {
   // Attach to console when present (e.g., 'flutter run') or create a
@@ -17,6 +36,10 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
   // plugins.
   ::CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
 
+  // Do not close this handle manually while the app is running.
+  const HANDLE agent_process_job = CreateAgentProcessJob();
+  (void)agent_process_job;
+
   flutter::DartProject project(L"data");
 
   std::vector<std::string> command_line_arguments =
@@ -27,7 +50,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
   FlutterWindow window(project);
   Win32Window::Point origin(10, 10);
   Win32Window::Size size(1280, 720);
-  if (!window.Create(L"rwkvbuddy", origin, size)) {
+  if (!window.Create(L"RWKVBuddy", origin, size)) {
     return EXIT_FAILURE;
   }
   window.SetQuitOnClose(true);

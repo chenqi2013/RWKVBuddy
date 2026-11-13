@@ -32,6 +32,10 @@ migrate_working_dir/
 .pub/
 /build/
 /coverage/
+/agent-service/runtime/
+/agent-service/node_modules/
+/agent-service/default-connection.json
+/docs/analysis/ziliao.txt
 
 # Symbolication related
 app.*.symbols

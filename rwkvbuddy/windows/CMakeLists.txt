@@ -106,3 +106,13 @@ install(DIRECTORY "${PROJECT_BUILD_DIR}/${FLUTTER_ASSET_DIR_NAME}"
 install(FILES "${AOT_LIBRARY}" DESTINATION "${INSTALL_BUNDLE_DATA_DIR}"
   CONFIGURATIONS Profile;Release
   COMPONENT Runtime)
+
+# Ship the local agent service beside the Flutter executable for all build modes.
+if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../agent-service/node_modules/pdfjs-dist/package.json")
+  message(FATAL_ERROR "Document dependencies missing. Run: npm ci --prefix agent-service --omit=optional --ignore-scripts")
+endif()
+install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/../agent-service/"
+  DESTINATION "${CMAKE_INSTALL_PREFIX}/agent-service"
+  COMPONENT Runtime
+  PATTERN "test" EXCLUDE
+  PATTERN ".package-lock.json" EXCLUDE)

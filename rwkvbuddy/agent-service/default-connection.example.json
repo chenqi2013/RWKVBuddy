@@ -1,0 +1,14 @@
+{
+  "id": "builtin-qwen-server",
+  "version": 1,
+  "name": "千问 · 服务器",
+  "baseUrl": "http://127.0.0.1:8000",
+  "apiKey": "",
+  "model": "",
+  "autoModel": true,
+  "protocol": "chat",
+  "concurrency": 2,
+  "maxTokens": 4096,
+  "temperature": 0.2,
+  "enableThinking": false
+}

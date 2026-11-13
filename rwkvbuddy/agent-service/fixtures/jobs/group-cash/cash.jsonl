@@ -1,0 +1,9 @@
+{"kind":"in","counterparty":"华能结算","amount":50000.00,"status":"posted"}
+{"kind":"in","counterparty":"江南往来","amount":18000.00,"status":"posted"}
+{"kind":"out","counterparty":"税务","amount":22000.00,"status":"posted"}
+{"kind":"in","counterparty":"华能结算","amount":12000.00,"status":"posted"}
+{"kind":"out","counterparty":"供应商丙","amount":8500.25,"status":"posted"}
+{"kind":"in","counterparty":"西岭往来","amount":3300.50,"status":"posted"}
+{"kind":"in","counterparty":"作废客户","amount":9999.00,"status":"void"}
+{"kind":"out","counterparty":"税务","amount":1000.00,"status":"pending"}
+{"kind":"in","counterparty":"北辰往来","amount":4100.00,"status":"posted"}

@@ -1,0 +1,119 @@
+{
+  "observedAtUtc": "2026-11-12T03:54:42.669Z",
+  "referenceRoot": "C:\\Users\\bay13\\Documents\\foreman-cli",
+  "node": "v24.15.0",
+  "platform": "win32",
+  "liveInferenceTested": false,
+  "results": [
+    {
+      "id": "P01_windows_async_lua",
+      "status": "confirmed",
+      "evidence": {
+        "platform": "win32",
+        "peakLiveChildProcesses": 2,
+        "eventLoopHeartbeat": 15,
+        "outputs": [
+          "ok",
+          "ok"
+        ],
+        "scope": "OS child-process overlap; not a model-throughput benchmark"
+      }
+    },
+    {
+      "id": "P02_batch_waves_are_sequential",
+      "status": "confirmed",
+      "evidence": {
+        "mocked": true,
+        "prompts": 5,
+        "waveSize": 2,
+        "requestBatchSizes": [
+          2,
+          2,
+          1
+        ],
+        "peakConcurrentRequests": 1
+      }
+    },
+    {
+      "id": "P03_worker_tools_are_sequential",
+      "status": "confirmed",
+      "evidence": {
+        "mocked": true,
+        "independentWorkers": 2,
+        "peakConcurrentAsyncToolHandlers": 1
+      }
+    },
+    {
+      "id": "P04_tool_failure_aborts_siblings",
+      "status": "confirmed",
+      "evidence": {
+        "mocked": true,
+        "wholeRunRejected": true,
+        "siblingToolExecuted": false
+      }
+    },
+    {
+      "id": "P05_file_views_are_separate",
+      "status": "confirmed",
+      "evidence": {
+        "mocked": true,
+        "sessionFiles": {
+          "a": [
+            "a.txt"
+          ],
+          "b": [
+            "b.txt"
+          ]
+        },
+        "scope": "logical VirtualFs isolation; not OS process isolation"
+      }
+    },
+    {
+      "id": "P06_grounding_checks_only_profit_or_net",
+      "status": "confirmed",
+      "evidence": {
+        "local": "co=north rev=1280000.00 cost=750000.00 rate=0.15 profit=450500.00",
+        "submittedWithIncorrectRevenue": "co=north rev=1.00 cost=750000.00 rate=0.15 profit=450500.00",
+        "incorrectRevenuePreserved": true,
+        "nullSubmissionFilledLocally": true,
+        "hasExplicitFallbackProvenance": false
+      }
+    },
+    {
+      "id": "P07_sse_unterminated_last_line",
+      "status": "confirmed",
+      "evidence": {
+        "mocked": true,
+        "unterminatedFinalSseLineDiscarded": true,
+        "outputs": [
+          ""
+        ],
+        "scope": "truncated/unterminated stream edge case"
+      }
+    },
+    {
+      "id": "P08_batch_uses_first_item_settings",
+      "status": "confirmed",
+      "evidence": {
+        "mocked": true,
+        "requestedMaxTokens": [
+          11,
+          99
+        ],
+        "transmittedSharedMaxTokens": 11
+      }
+    }
+  ],
+  "sourceSha256": {
+    "src/session.ts": "1216cee18e8ddfdaaa1ca88707e1aad91f8e5843b62d0247b09681c42a8efd62",
+    "src/jobs.ts": "ab31d954f2387458b7813ef08248202e70402820b62141b9e6ce8c2b3964df6e",
+    "src/rwkv-batch.ts": "4878c918577952959896a8219eef19df8b14c281cfaa52c4d1f68900ae9f13bd",
+    "src/tools.ts": "f4339021c5781eff7206452320d2f1f7a0c2e449645081ce02210f154776274c",
+    "src/finance.ts": "87048ceaf58d50e66c685bd213032f958c1a73e2951efc02a7509e21d6474246",
+    "src/repl.ts": "15019705cae0946dca3f6c32afb81aab283e0acfce888970a5c7292ec179aa19",
+    "src/view.ts": "3da04b9190705bf20a2e9eff59ca14cfd204cbcde9cbf47ae927f6246375e127",
+    "src/sketches.ts": "7b43878f0e9dd7f04777b583c836f0713273034c4339ab2638c15db6a945b94e",
+    "src/workspace.ts": "c1ce62d56958f7d60b2cbd338202686d181e8ca56038e7793067056b294b76c0",
+    "scripts/package-windows.ps1": "ff75523d8200b2e756a0a2c808e031ceec50b5279d0f3892eaf7bedd98caa8ba"
+  }
+}
