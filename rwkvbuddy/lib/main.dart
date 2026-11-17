@@ -140,6 +140,7 @@ class _WorkspacePageState extends State<WorkspacePage>
   void initState() {
     super.initState();
     agent = widget.controller ?? AgentController();
+    _lastRunId = agent.runId;
     agent.addListener(_followConversation);
     WidgetsBinding.instance.addObserver(this);
   }
@@ -167,23 +168,12 @@ class _WorkspacePageState extends State<WorkspacePage>
   void _followConversation() {
     final changed = agent.runId != _lastRunId;
     _lastRunId = agent.runId;
-    if (_scrollQueued || (!agent.busy && !changed)) return;
-    if (!changed &&
-        contentScroll.hasClients &&
-        contentScroll.position.maxScrollExtent - contentScroll.offset > 100) {
-      return;
-    }
+    if (_scrollQueued || !changed) return;
     _scrollQueued = true;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _scrollQueued = false;
       if (mounted && contentScroll.hasClients) {
-        // Preserve the process being viewed when the final answer arrives.
-        // Reopened history starts with its records instead of hiding them below the fold.
-        if (agent.busy) {
-          contentScroll.jumpTo(contentScroll.position.maxScrollExtent);
-        } else if (changed) {
-          contentScroll.jumpTo(0);
-        }
+        contentScroll.jumpTo(0);
       }
     });
   }
@@ -359,22 +349,6 @@ class _WorkspacePageState extends State<WorkspacePage>
                 ),
               ),
             ),
-          ),
-        ),
-        const Padding(
-          padding: EdgeInsets.fromLTRB(25, 20, 20, 18),
-          child: Row(
-            children: [
-              Icon(
-                Icons.auto_awesome_outlined,
-                size: 17,
-                color: Color(0xFF686868),
-              ),
-              SizedBox(width: 10),
-              Text('文件助手', style: TextStyle(fontSize: 13)),
-              Spacer(),
-              Text('桌面版', style: TextStyle(fontSize: 10, color: muted)),
-            ],
           ),
         ),
         const Padding(
@@ -1048,6 +1022,19 @@ class _WorkspacePageState extends State<WorkspacePage>
             statusLabel(agent.run!['status'] as String?),
             _statusColor(agent.run!['status'] as String?),
           ),
+          IconButton(
+            tooltip: '跳到最新内容',
+            onPressed: () {
+              if (contentScroll.hasClients) {
+                contentScroll.animateTo(
+                  contentScroll.position.maxScrollExtent,
+                  duration: const Duration(milliseconds: 200),
+                  curve: Curves.easeOut,
+                );
+              }
+            },
+            icon: const Icon(Icons.vertical_align_bottom_rounded, size: 18),
+          ),
         ],
       ),
       if (agent.busy)
@@ -1061,10 +1048,12 @@ class _WorkspacePageState extends State<WorkspacePage>
         ),
       const SizedBox(height: 10),
       Expanded(
-        child: ListView(
+        child: SingleChildScrollView(
           controller: contentScroll,
           key: ValueKey(agent.runId),
-          children: [_conversation(), const SizedBox(height: 18)],
+          child: Column(
+            children: [_conversation(), const SizedBox(height: 18)],
+          ),
         ),
       ),
     ],
@@ -1117,20 +1106,29 @@ class _WorkspacePageState extends State<WorkspacePage>
               const SizedBox(height: 12),
               if (turn['id'] == agent.runId ||
                   (turn['traces'] as List? ?? []).isNotEmpty) ...[
-                TraceView(agent: agent, turn: turn, onExport: exportTrace),
+                TraceView(
+                  agent: agent,
+                  turn: turn,
+                  onExport: exportTrace,
+                  showAnswerDraft: false,
+                ),
                 const SizedBox(height: 14),
               ],
-              if ((turn['answer'] as String? ?? '').isNotEmpty ||
-                  (turn['report'] as String? ?? '').isNotEmpty) ...[
-                const Text(
-                  '生成结果',
-                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+              if (_answerText(turn).isNotEmpty) ...[
+                Text(
+                  (turn['answer'] as String? ?? '').isNotEmpty
+                      ? '生成结果'
+                      : turn['status'] == 'running'
+                      ? '回答草稿 · 正在生成，尚未完成'
+                      : '回答草稿 · 已中断，未作为结果提交',
+                  style: const TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                  ),
                 ),
                 const SizedBox(height: 10),
                 MarkdownBody(
-                  data: (turn['answer'] as String? ?? '').isNotEmpty
-                      ? turn['answer'] as String
-                      : turn['report'] as String? ?? '',
+                  data: _answerText(turn),
                   selectable: true,
                   styleSheet: MarkdownStyleSheet.fromTheme(Theme.of(context))
                       .copyWith(
@@ -1166,7 +1164,9 @@ class _WorkspacePageState extends State<WorkspacePage>
                         blockSpacing: 14,
                       ),
                 ),
-              ] else if (turn['status'] != 'running')
+              ],
+              if (turn['status'] != 'running' &&
+                  (turn['answer'] as String? ?? '').isEmpty)
                 Text(
                   turn['error'] as String? ??
                       statusLabel(turn['status'] as String?),
@@ -1202,6 +1202,21 @@ class _WorkspacePageState extends State<WorkspacePage>
       ],
     ],
   );
+
+  String _answerText(Json turn) {
+    final answer = turn['answer'] as String? ?? '';
+    if (answer.isNotEmpty) return answer;
+    final traces = turn['id'] == agent.runId
+        ? agent.traces
+        : (turn['traces'] as List? ?? []).cast<Json>();
+    for (final trace in traces.reversed) {
+      final draft = trace['answerPreview'] as String? ?? '';
+      if (draft.isNotEmpty) return draft;
+    }
+    return (turn['error'] as String? ?? '').isEmpty
+        ? turn['report'] as String? ?? ''
+        : '';
+  }
 
   Widget _deliveryCards(Json turn) => Padding(
     padding: const EdgeInsets.only(top: 14),

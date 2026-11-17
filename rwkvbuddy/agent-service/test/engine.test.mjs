@@ -104,7 +104,7 @@ test('live public model progress is forwarded and kept in completed history', as
   const state = await run.execute();
   assert.equal(state.status, 'completed');
   assert.equal(state.traces.at(-1).progress, '整理当前问题');
-  assert.equal(state.traces.at(-1).answerPreview, undefined);
+  assert.equal(state.traces.at(-1).answerPreview, '正文草稿完成');
   const saved = JSON.parse(await readFile(join(run.directory, 'run.json'), 'utf8'));
   assert.equal(saved.traces.at(-1).progress, '整理当前问题');
 });
@@ -187,7 +187,7 @@ test('document-only workspace produces direct local results without fixed expert
   assert.match(state.report, /TODO/);
 });
 
-test('token truncation retries once with compact output while preserving the failed request record', async (t) => {
+test('token truncation retries with compact output while preserving the failed request record', async (t) => {
   const root = await scratch(t);
   let calls = 0;
   const provider = { generate: async (instruction) => {
@@ -203,5 +203,33 @@ test('token truncation retries once with compact output while preserving the fai
   const broken = { generate: async () => { calls++; throw Object.assign(new Error('输出被截断'), { code: 'MODEL_OUTPUT_TRUNCATED' }); } };
   const failed = await new AgentRun({ question: '介绍工程', sourceMode: 'text', mode: 'rwkv' }, root, () => {}, { provider: broken }).execute();
   assert.equal(failed.status, 'failed');
-  assert.equal(calls, 2);
+  assert.equal(calls, 3);
+});
+
+test('truncated file delivery increases output allowance and retries compact files without publishing fragments', async (t) => {
+  const root = await scratch(t);
+  let calls = 0;
+  const events = [];
+  const provider = { generate: async (instruction, _payload, _signal, delta, options) => {
+    calls++;
+    if (calls < 3) {
+      if (calls === 2) {
+        assert.equal(options.maxTokens, 8192);
+        assert.match(instruction, /精简报告/);
+      }
+      const text = '{"progress":"整理表格","answer":"未完成草稿';
+      delta(text.length, text, { phase: 'streaming' });
+      throw Object.assign(new Error('输出被截断'), { code: 'MODEL_OUTPUT_TRUNCATED' });
+    }
+    assert.equal(options.maxTokens, 8192);
+    assert.match(instruction, /200 字/);
+    assert.equal(events.some((event) => event.type === 'files.created'), false);
+    return { answer: '关键结论已整理。', files: [{ name: '报告.md', content: '# 汇总\n实际结果。' }] };
+  } };
+  const state = await new AgentRun({ question: '分析表格并生成文件', sourceMode: 'text', mode: 'rwkv', outputMode: 'files', config: { maxTokens: 4096 } }, root, (event) => events.push(event), { provider }).execute();
+  assert.equal(state.status, 'completed', state.error);
+  assert.equal(calls, 3);
+  assert.equal(state.deliverables.length, 1);
+  assert.equal(events.filter((event) => event.type === 'model.recovering').length, 2);
+  assert.equal(state.traces.filter((trace) => trace.kind === 'model').at(-1).answerPreview, state.answer);
 });

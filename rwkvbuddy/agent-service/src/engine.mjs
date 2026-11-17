@@ -148,7 +148,8 @@ export class AgentRun {
       trace.status = 'completed';
       if (kind === 'model') {
         trace.progress = typeof result?.progress === 'string' ? result.progress.slice(0, 600) : trace.progress || '';
-        delete trace.answerPreview;
+        if (typeof result?.answer === 'string') trace.answerPreview = result.answer;
+        else delete trace.answerPreview;
         delete trace.pendingTool;
       }
       trace.output = typeof result === 'string' ? result.slice(0, 32000) : JSON.stringify(result).slice(0, 32000);
@@ -165,22 +166,29 @@ export class AgentRun {
       this.event('trace.finished', { trace }, roleId);
     }
   }
-  async generate(roleId, instruction, payload, canCompact = true) {
+  async generate(roleId, instruction, payload, attempt = 0) {
+    const recovery = attempt ? '\n上一响应超过输出上限而被截断，尚未提交成功。请重新提交完整且更精简的 JSON，避免重复已知内容。' +
+      (attempt === 1 ? '回答控制在 500 字内（不超过 800 字），progress 仅一句。' : '回答控制在 200 字以内，progress 仅一句。') +
+      '覆盖关键结论，省略执行过程、完整原始数据和重复说明。' +
+      (this.state.outputMode === 'files' ? '本轮仍须生成用户要求的成果文件；优先只交付一份精简报告（用户明确要求多份时遵从），仅包含关键汇总、异常和结论。正文与 answer 不要重复长文，避免复制整份输入表格。保持用户要求的文件格式，文件内容与 JSON 必须完整。' : '如生成文件，其内容也必须简短完整。') : '';
+    const maxTokens = attempt ? Math.min(8192, Math.max(4096, (Number(this.command.config?.maxTokens) || 4096) * 2)) : undefined;
     try {
       return await this.trace(roleId, 'model', this.command.config?.model || '远端模型',
-        { instruction, ...payload }, async (onDelta) => {
+        { instruction: instruction + recovery, ...payload, ...(attempt ? { recoveryAttempt: attempt, maxTokens } : {}) }, async (onDelta) => {
           let last = 0;
           let phase = '';
-          return this.provider.generate(instruction, payload, this.signal, (length, text, status = {}) => {
+          return this.provider.generate(instruction + recovery, payload, this.signal, (length, text, status = {}) => {
             if (status.phase === phase && Date.now() - last < 250) return;
             phase = status.phase;
             last = Date.now();
             onDelta(length, text, status);
-          });
+          }, { maxTokens });
         });
     } catch (error) {
-      if (this.signal.aborted || !canCompact || error.code !== 'MODEL_OUTPUT_TRUNCATED') throw error;
-      return this.generate(roleId, instruction + '\n上一响应超过输出上限而被截断，尚未提交成功。请重新提交完整且更精简的 JSON：回答控制在 800 字内，覆盖用户所有问题，省略执行过程和重复说明；如需生成文件，也须确保文件内容和 JSON 均完整。', payload, false);
+      if (this.signal.aborted || attempt >= 2 || error.code !== 'MODEL_OUTPUT_TRUNCATED') throw error;
+      this.event('model.recovering', { attempt: attempt + 1, maxTokens: Math.min(8192, Math.max(4096, (Number(this.command.config?.maxTokens) || 4096) * 2)),
+        message: '模型输出超限，正在提高输出额度并精简内容后重试；尚未完成交付。' });
+      return this.generate(roleId, instruction, payload, attempt + 1);
     }
   }
   async execute() {

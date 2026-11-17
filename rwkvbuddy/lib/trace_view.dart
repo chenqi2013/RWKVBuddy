@@ -12,10 +12,12 @@ class TraceView extends StatefulWidget {
     required this.agent,
     required this.onExport,
     this.turn,
+    this.showAnswerDraft = true,
   });
   final AgentController agent;
   final VoidCallback onExport;
   final Json? turn;
+  final bool showAnswerDraft;
 
   @override
   State<TraceView> createState() => _TraceViewState();
@@ -210,6 +212,7 @@ class _TraceViewState extends State<TraceView> {
           if (!(trace['kind'] == 'model' &&
               trace['input']?['project'] is Map &&
               trace['status'] == 'completed' &&
+              (trace['answerPreview'] as String? ?? '').isEmpty &&
               (trace['progress'] as String? ?? '').isEmpty))
             _step(trace),
           if (trace['name'] == 'input.read') _readList(reads),
@@ -356,6 +359,13 @@ class _TraceViewState extends State<TraceView> {
     final rows = <Widget>[];
     if (trace['kind'] == 'model') {
       final project = input['project'] is Map;
+      if (input['recoveryAttempt'] != null) {
+        rows.add(
+          _note(
+            '输出超限后重试 · 第 ${input['recoveryAttempt']} 次 · 输出额度 ${input['maxTokens']} Token · 精简回答与文件内容',
+          ),
+        );
+      }
       final files = (input['sourceTexts'] as List? ?? [])
           .map((item) => Map<String, dynamic>.from(item as Map))
           .toList();
@@ -429,6 +439,8 @@ class _TraceViewState extends State<TraceView> {
             ),
           );
         }
+      } else if (trace['status'] == 'completed' && project) {
+        rows.add(_note(output['tool'] != null ? '已生成下一步工具请求' : '已接收完整回答'));
       }
       final progress =
           trace['progress'] as String? ?? output['progress'] as String? ?? '';
@@ -446,7 +458,9 @@ class _TraceViewState extends State<TraceView> {
         );
       }
       final draft = trace['answerPreview'] as String? ?? '';
-      if (draft.isNotEmpty && trace['status'] != 'completed') {
+      if (widget.showAnswerDraft &&
+          draft.isNotEmpty &&
+          trace['status'] != 'completed') {
         rows.add(
           _note(
             trace['status'] == 'running'

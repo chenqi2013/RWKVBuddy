@@ -151,7 +151,7 @@ void main() {
       () => agent.traces.any((trace) => trace['progress'] == progress),
     );
     await waitUntil(() => find.text('Markdown 预览').evaluate().isNotEmpty);
-    final conversation = tester.widget<ListView>(
+    final conversation = tester.widget<SingleChildScrollView>(
       find.byKey(ValueKey(agent.runId)),
     );
     conversation.controller!.jumpTo(0);

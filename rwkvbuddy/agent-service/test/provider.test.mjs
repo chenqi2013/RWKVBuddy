@@ -75,6 +75,22 @@ test('token-truncated streamed responses are reported separately from malformed 
   await assert.rejects(provider.generate('分析', {}, new AbortController().signal), (error) => error.code === 'MODEL_OUTPUT_TRUNCATED' && /截断/.test(error.message));
 });
 
+test('recovery output allowance overrides request tokens without changing saved connection', async (t) => {
+  const limits = [];
+  const baseUrl = await server(t, async (request, response) => {
+    const input = await body(request);
+    limits.push(input.max_tokens);
+    response.writeHead(200, { 'Content-Type': 'application/json' });
+    response.end(JSON.stringify({ choices: [{ message: { content: '{"answer":"完成"}' }, finish_reason: 'stop' }] }));
+  });
+  const config = { baseUrl, protocol: 'chat', model: 'test-model', maxTokens: 4096 };
+  const provider = new Provider(config, new Pool(1));
+  await provider.generate('分析', {}, new AbortController().signal);
+  await provider.generate('重试', {}, new AbortController().signal, () => {}, { maxTokens: 8192 });
+  assert.deepEqual(limits, [4096, 8192]);
+  assert.equal(config.maxTokens, 4096);
+});
+
 test('chat streams public content before request completion and ignores reasoning deltas', async (t) => {
   let release;
   const gate = new Promise((done) => { release = done; });

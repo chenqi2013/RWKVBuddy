@@ -13,7 +13,7 @@ export class Provider {
     });
     return this.modelPromise;
   }
-  async generate(instruction, payload, signal, onDelta = () => {}) {
+  async generate(instruction, payload, signal, onDelta = () => {}, options = {}) {
     onDelta(0, '', { phase: 'queued' });
     return this.pool.use(async () => {
       checkAbort(signal);
@@ -27,7 +27,7 @@ export class Provider {
       const system = '你是一位严谨的中文专业助理。仅输出严格 JSON。只依据给定资料，明确资料局限，不编造事实。';
       const prompt = `System: Tools:\n[{"name":"submit","description":"Submit JSON analysis","arguments":{"answer":{"type":"object"}}}]\n${system}\nReturn only {"name":"submit","arguments":{"answer":<JSON object>}}.\n\nUser: ${user}\n\nAssistant: \`\`\`json\n`;
       const generation = { temperature: Math.max(0, Math.min(2, Number(config.temperature ?? 0.2))),
-        max_tokens: Math.max(256, Math.min(8192, Number(config.maxTokens) || 4096)) };
+        max_tokens: Math.max(256, Math.min(8192, Number(options.maxTokens ?? config.maxTokens) || 4096)) };
       const body = mode === 'chat' ? {
         model, stream: true, ...generation,
         messages: [{ role: 'system', content: system }, { role: 'user', content: user }],
