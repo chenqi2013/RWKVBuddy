@@ -2,6 +2,8 @@ import 'dart:async';
 import 'dart:ui' show AppExitResponse;
 import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart' show ScrollDirection;
+import 'package:flutter/scheduler.dart' show Ticker;
 import 'package:flutter/services.dart';
 import 'agent_controller.dart';
 import 'connection_settings.dart';
@@ -126,12 +128,16 @@ class WorkspacePage extends StatefulWidget {
 }
 
 class _WorkspacePageState extends State<WorkspacePage>
-    with WidgetsBindingObserver {
+    with WidgetsBindingObserver, SingleTickerProviderStateMixin {
   late final AgentController agent;
   final prompt = TextEditingController();
   final contentScroll = ScrollController(keepScrollOffset: false);
   String _lastRunId = '';
   bool _scrollQueued = false;
+  bool _resetScrollPending = false;
+  bool _followingLatest = false;
+  late final Ticker _followTicker;
+  Duration _lastFollowTick = Duration.zero;
   bool _exiting = false;
   bool _sidebarOpen = true;
   int _category = 0;
@@ -141,8 +147,11 @@ class _WorkspacePageState extends State<WorkspacePage>
     super.initState();
     agent = widget.controller ?? AgentController();
     _lastRunId = agent.runId;
+    _followingLatest = agent.busy;
+    _followTicker = createTicker(_advanceFollowScroll);
     agent.addListener(_followConversation);
     WidgetsBinding.instance.addObserver(this);
+    _queueFollowScroll();
   }
 
   @override
@@ -161,6 +170,7 @@ class _WorkspacePageState extends State<WorkspacePage>
     if (widget.controller == null) agent.dispose();
     promptFocus.dispose();
     prompt.dispose();
+    _followTicker.dispose();
     contentScroll.dispose();
     super.dispose();
   }
@@ -168,14 +178,71 @@ class _WorkspacePageState extends State<WorkspacePage>
   void _followConversation() {
     final changed = agent.runId != _lastRunId;
     _lastRunId = agent.runId;
-    if (_scrollQueued || !changed) return;
+    if (changed) {
+      _followTicker.stop();
+      _followingLatest = agent.busy;
+      _resetScrollPending = true;
+    }
+    _queueFollowScroll();
+  }
+
+  void _queueFollowScroll() {
+    if (_scrollQueued) return;
     _scrollQueued = true;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _scrollQueued = false;
-      if (mounted && contentScroll.hasClients) {
+      if (!mounted || !contentScroll.hasClients) return;
+      if (_resetScrollPending) {
+        _resetScrollPending = false;
         contentScroll.jumpTo(0);
       }
+      if (_followingLatest &&
+          !_followTicker.isActive &&
+          contentScroll.position.extentAfter > 0.5) {
+        _lastFollowTick = Duration.zero;
+        _followTicker.start();
+      }
     });
+    WidgetsBinding.instance.ensureVisualUpdate();
+  }
+
+  void _advanceFollowScroll(Duration elapsed) {
+    if (!_followingLatest || !contentScroll.hasClients) {
+      _followTicker.stop();
+      return;
+    }
+    final position = contentScroll.position;
+    final remaining = position.maxScrollExtent - position.pixels;
+    if (remaining <= 0.5) {
+      if (remaining > 0) contentScroll.jumpTo(position.maxScrollExtent);
+      _followTicker.stop();
+      return;
+    }
+    final milliseconds = _lastFollowTick == Duration.zero
+        ? 16.0
+        : (elapsed - _lastFollowTick).inMicroseconds / 1000;
+    _lastFollowTick = elapsed;
+    final fraction = (milliseconds / 80).clamp(0.01, 0.4);
+    contentScroll.jumpTo(position.pixels + remaining * fraction);
+  }
+
+  bool _onConversationScroll(ScrollNotification notification) {
+    if (notification.depth != 0) return false;
+    final direction = notification is UserScrollNotification
+        ? notification.direction
+        : notification is ScrollUpdateNotification
+        ? contentScroll.position.userScrollDirection
+        : null;
+    if (direction == null) return false;
+    if (direction == ScrollDirection.forward) {
+      _followingLatest = false;
+      _followTicker.stop();
+    } else if (notification is UserScrollNotification ||
+        direction == ScrollDirection.reverse) {
+      _followingLatest = notification.metrics.extentAfter <= 24;
+      if (_followingLatest) _queueFollowScroll();
+    }
+    return false;
   }
 
   Future<void> chooseDirectory() async {
@@ -1025,13 +1092,8 @@ class _WorkspacePageState extends State<WorkspacePage>
           IconButton(
             tooltip: '跳到最新内容',
             onPressed: () {
-              if (contentScroll.hasClients) {
-                contentScroll.animateTo(
-                  contentScroll.position.maxScrollExtent,
-                  duration: const Duration(milliseconds: 200),
-                  curve: Curves.easeOut,
-                );
-              }
+              _followingLatest = true;
+              _queueFollowScroll();
             },
             icon: const Icon(Icons.vertical_align_bottom_rounded, size: 18),
           ),
@@ -1048,11 +1110,20 @@ class _WorkspacePageState extends State<WorkspacePage>
         ),
       const SizedBox(height: 10),
       Expanded(
-        child: SingleChildScrollView(
-          controller: contentScroll,
-          key: ValueKey(agent.runId),
-          child: Column(
-            children: [_conversation(), const SizedBox(height: 18)],
+        child: NotificationListener<ScrollMetricsNotification>(
+          onNotification: (notification) {
+            if (notification.depth == 0) _queueFollowScroll();
+            return false;
+          },
+          child: NotificationListener<ScrollNotification>(
+            onNotification: _onConversationScroll,
+            child: SingleChildScrollView(
+              controller: contentScroll,
+              key: ValueKey(agent.runId),
+              child: Column(
+                children: [_conversation(), const SizedBox(height: 18)],
+              ),
+            ),
           ),
         ),
       ),
