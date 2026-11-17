@@ -14,6 +14,7 @@ export class Provider {
     return this.modelPromise;
   }
   async generate(instruction, payload, signal, onDelta = () => {}) {
+    onDelta(0, '', { phase: 'queued' });
     return this.pool.use(async () => {
       checkAbort(signal);
       const config = this.config;
@@ -40,6 +41,7 @@ export class Provider {
       const requestSignal = AbortSignal.any([signal, AbortSignal.timeout(120000)]);
       let response;
       try {
+        onDelta(0, '', { phase: 'requesting' });
         response = await fetch(target.endpoint, {
           method: 'POST', headers, body: JSON.stringify(body), signal: requestSignal,
         });
@@ -53,6 +55,7 @@ export class Provider {
       }
       let text = '';
       let finishReason = '';
+      onDelta(0, '', { phase: 'waiting' });
       const consume = (line) => {
         const raw = line.trim().replace(/^data:\s*/, '');
         if (!raw || /^(?:event|id|retry):/.test(raw) || raw.startsWith(':') || raw === '[DONE]') return;
@@ -64,7 +67,7 @@ export class Provider {
           const piece = choice.delta?.content || choice.message?.content || choice.text || '';
           text += piece;
           if (text.length > 64000) throw new Error('模型输出超过限制');
-          if (piece) onDelta(text.length, text);
+          if (piece) onDelta(text.length, text, { phase: 'streaming' });
         }
       };
       if (response.headers.get('content-type')?.includes('application/json')) {

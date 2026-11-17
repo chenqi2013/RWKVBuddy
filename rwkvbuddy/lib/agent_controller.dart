@@ -211,12 +211,21 @@ class AgentController extends ChangeNotifier {
         run?['template'] = payload['template'];
       case 'input.completed':
         run?['attachments'] = payload['attachments'];
+      case 'input.resolved':
+        workspace = payload['workspace'] as String;
+        sourceMode = 'directory';
+        selectedFiles = [];
+        run?.addAll(payload);
       case 'files.created':
         run?['deliverables'] = payload['files'];
       case 'run.error':
         error = payload['message'] as String;
       case 'run.finished':
         run?.addAll(payload);
+        if (payload['workspace'] is String) {
+          workspace = payload['workspace'] as String;
+          sourceMode = payload['sourceMode'] as String? ?? sourceMode;
+        }
         busy = false;
         error = payload['error'] as String? ?? '';
       case 'report.exported':
@@ -233,7 +242,7 @@ class AgentController extends ChangeNotifier {
         event['type'] != 'run.started' &&
         event['type'] != 'trace.delta') {
       events.add(event);
-      if (events.length > 400) events.removeAt(0);
+      if (events.length > 1200) events.removeAt(0);
     }
     update();
   }

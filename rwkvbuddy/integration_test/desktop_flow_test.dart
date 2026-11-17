@@ -82,11 +82,13 @@ void main() {
       expect(agent.config['protocol'], 'chat');
       expect(agent.config['apiKey'], isNotEmpty);
       expect(agent.mode, 'rwkv');
-      agent.setMode('local');
       await screenshot('welcome');
+      agent.setMode('local');
+      await tester.ensureVisible(find.text('经营与资金分析'));
+      await tester.pumpAndSettle();
       await tester.tap(find.text('经营与资金分析'));
       await tester.pump();
-      await tester.tap(find.text('开始处理'));
+      await tester.tap(find.byKey(const Key('send-message')));
       await waitUntil(() => agent.run != null && !agent.busy);
       expect(agent.run!['status'], 'completed', reason: agent.error);
       expect(
@@ -134,7 +136,7 @@ void main() {
       final input = find.byType(TextField).first;
       await tester.enterText(input, '分析我添加的客户需求和销售数据，指出风险。');
       await screenshot('selected-files');
-      await tester.tap(find.text('开始处理'));
+      await tester.tap(find.byKey(const Key('send-message')));
       await waitUntil(() => agent.run != null && !agent.busy);
       expect(agent.run!['status'], 'completed', reason: agent.error);
       expect(agent.report, contains('24680'));
@@ -158,11 +160,12 @@ void main() {
       FocusManager.instance.primaryFocus?.unfocus();
       await tester.pumpAndSettle();
       await tester.enterText(find.byType(TextField).first, '继续说明资料中存在的风险');
+      await tester.pump();
       expect(
         tester.widget<TextField>(find.byType(TextField).first).controller!.text,
         '继续说明资料中存在的风险',
       );
-      await tester.tap(find.text('发送追问'));
+      await tester.tap(find.byKey(const Key('send-message')));
       await tester.pump();
       await waitUntil(
         () => agent.run != null && agent.runId != uploadedId && !agent.busy,

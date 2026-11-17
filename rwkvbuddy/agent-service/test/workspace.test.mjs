@@ -34,18 +34,24 @@ test('project with nested malformed finance fixtures reaches the model with READ
   assert.equal(facts.files[1].path, 'pubspec.yaml');
   assert.ok(facts.evidence.some((source) => source.path === 'lib/main.dart'));
   let called = false;
+  const events = [];
   const provider = { generate: async (_instruction, payload) => {
     called = true;
+    assert.ok(events.some((event) => event.type === 'input.indexed'));
     for (const path of ['README.md', 'pubspec.yaml', 'lib/main.dart', 'agent-service/package.json']) {
-      assert.ok(payload.sourceTexts.some((source) => source.path === path), path);
+      assert.ok(payload.project.keyFiles.includes(path), path);
     }
+    assert.deepEqual(payload.sourceTexts, []);
+    if (!payload.toolResults.length) return { tool: 'read_file', arguments: { path: 'README.md' } };
+    assert.match(payload.toolResults[0].result.text, /Flutter/);
     assert.equal(payload.question, question);
     assert.equal(payload.verifiedFacts, undefined);
     return { answer: '这是 Flutter 桌面文件助手，提供分析、工具调用和成果下载，服务使用 Node.js。' };
   } };
-  const state = await new AgentRun({ question, sourceMode: 'directory', workspace: root, mode: 'rwkv' }, join(root, 'runs'), () => {}, { provider }).execute();
+  const state = await new AgentRun({ question, sourceMode: 'directory', workspace: root, mode: 'rwkv' }, join(root, 'runs'), (event) => events.push(event), { provider }).execute();
   assert.equal(state.status, 'completed', state.error);
   assert.ok(called);
+  assert.ok(state.traces.some((trace) => trace.name === 'read_file' && trace.output.includes('Flutter')));
   assert.match(state.answer, /Flutter/);
   assert.ok(!state.traces.some((trace) => trace.name.startsWith('lua.')));
   assert.deepEqual(state.warnings, []);
@@ -61,7 +67,8 @@ test('remote project questions bypass fixed finance parsing even with root-level
   await put(root, 'jobs/co-x/ledger.csv', 'malformed sample ledger');
   await put(root, 'shared/tax_rates.tsv', 'malformed sample rates');
   const provider = { generate: async (_instruction, payload) => {
-    assert.ok(payload.sourceTexts.some((source) => source.path === 'README.md'));
+    assert.ok(payload.project.keyFiles.includes('README.md'));
+    if (!payload.toolResults.length) return { tool: 'read_file', arguments: { path: 'README.md' } };
     return { answer: '这是财务数据导入工程，使用 Flutter 和 Node.js。' };
   } };
   const state = await new AgentRun({ question, sourceMode: 'directory', workspace: root, mode: 'rwkv' }, join(root, 'runs'), () => {}, { provider }).execute();

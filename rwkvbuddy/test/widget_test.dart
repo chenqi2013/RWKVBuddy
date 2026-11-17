@@ -141,10 +141,12 @@ void main() {
       addTearDown(tester.view.resetDevicePixelRatio);
       await tester.pumpWidget(MyApp(controller: controller));
       expect(find.text('你的专家团队'), findsNothing);
-      expect(find.text('开始处理'), findsOneWidget);
+      expect(find.byKey(const Key('send-message')), findsOneWidget);
+      await tester.ensureVisible(find.text('经营与资金分析'));
+      await tester.pumpAndSettle();
       await tester.tap(find.text('经营与资金分析'));
       await tester.pump();
-      expect(find.text('分析三家公司的经营与资金情况，指出异常并给我一份报告。'), findsNWidgets(2));
+      expect(find.text('分析三家公司的经营与资金情况，指出异常并给我一份报告。'), findsOneWidget);
       expect(tester.takeException(), isNull);
       tester.view.physicalSize = const Size(600, 720);
       await tester.pumpAndSettle();
@@ -278,18 +280,179 @@ void main() {
           ),
         ),
       );
-      await tester.tap(find.text('计算数据'));
-      await tester.pumpAndSettle();
-      expect(find.textContaining('6*7'), findsOneWidget);
-      expect(find.textContaining('42'), findsOneWidget);
-      await tester.tap(find.text('计算数据'));
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('分析与整理'));
-      await tester.pumpAndSettle();
+      // Useful details are visible without opening the raw input/output.
+      expect(find.text('6*7 = 42'), findsOneWidget);
       expect(find.text('HTTP 403'), findsOneWidget);
       expect(find.text('合同.txt · 已读取 12 行'), findsOneWidget);
+      await tester.tap(find.text('调用详情').first);
+      await tester.pumpAndSettle();
+      expect(find.textContaining('6*7'), findsNWidgets(2));
+      expect(find.textContaining('42'), findsNWidgets(2));
       expect(find.byType(DropdownButtonFormField<String>), findsNothing);
       expect(find.text('全部角色'), findsNothing);
+      expect(tester.takeException(), isNull);
+    },
+  );
+  testWidgets(
+    'live model context and directory read details are visible, then explain a turn without extra tools',
+    (tester) async {
+      final controller = AgentController(autoConnect: false);
+      addTearDown(controller.dispose);
+      controller.run = {'id': 'live', 'status': 'running'};
+      controller.events = [
+        {
+          'type': 'input.file_parsed',
+          'payload': {'name': 'README.md', 'lines': 12, 'source': 'directory'},
+        },
+        {
+          'type': 'input.file_parsed',
+          'payload': {
+            'name': 'pubspec.yaml',
+            'lines': 30,
+            'source': 'directory',
+          },
+        },
+      ];
+      controller.traces = [
+        {
+          'id': 'read',
+          'kind': 'read',
+          'name': 'input.read',
+          'status': 'completed',
+          'input': {'workspace': '/project', 'sourceMode': 'directory'},
+          'output': '{"fileCount":2,"files":["README.md","pubspec.yaml"]}',
+        },
+        {
+          'id': 'model',
+          'kind': 'model',
+          'name': 'qwen-test',
+          'status': 'running',
+          'characters': 128,
+          'progress': '正在核对 README 和依赖清单。',
+          'answerPreview': '该工程使用 Flutter，服务端使用 Node.js。',
+          'input': {
+            'question': '这个工程有什么功能？',
+            'sourceTexts': [
+              {'path': 'README.md', 'excerpt': '工程介绍'},
+              {'path': 'pubspec.yaml', 'excerpt': 'name: app'},
+            ],
+            'toolResults': [],
+          },
+        },
+      ];
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: ListView(
+              children: [TraceView(agent: controller, onExport: () {})],
+            ),
+          ),
+        ),
+      );
+      expect(find.text('README.md · 已读入快照 · 12 行'), findsOneWidget);
+      expect(find.text('pubspec.yaml · 已读入快照 · 30 行'), findsOneWidget);
+      expect(find.text('提供给模型：2 个文件片段'), findsOneWidget);
+      expect(find.text('正在接收模型响应 · 128 字符'), findsOneWidget);
+      expect(find.text('模型进度说明：正在核对 README 和依赖清单。'), findsOneWidget);
+      expect(find.text('回答草稿 · 正在生成，尚未完成'), findsOneWidget);
+      expect(find.text('该工程使用 Flutter，服务端使用 Node.js。'), findsOneWidget);
+      expect(find.text('• README.md · 4 字符片段'), findsOneWidget);
+      controller.run!['status'] = 'completed';
+      controller.traces.last.addAll({
+        'status': 'completed',
+        'output': '{"answer":"工程分析结果"}',
+      });
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: ListView(
+              children: [TraceView(agent: controller, onExport: () {})],
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('已生成回答'), findsOneWidget);
+      expect(find.text('回答草稿 · 正在生成，尚未完成'), findsNothing);
+      expect(find.text('本轮直接基于已提供的文件片段生成结果，没有额外工具调用。'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'waiting model shows elapsed time and explains the absence of server content',
+    (tester) async {
+      final controller = AgentController(autoConnect: false);
+      addTearDown(controller.dispose);
+      controller.run = {'id': 'waiting', 'status': 'running'};
+      controller.traces = [
+        {
+          'id': 'waiting-model',
+          'kind': 'model',
+          'name': 'qwen',
+          'status': 'running',
+          'phase': 'requesting',
+          'characters': 0,
+          'startedAt': DateTime.now()
+              .subtract(const Duration(seconds: 20))
+              .toIso8601String(),
+          'input': {'question': '分析工程'},
+        },
+      ];
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: TraceView(agent: controller, onExport: () {}),
+          ),
+        ),
+      );
+      expect(find.textContaining('请求已发出，等待服务端响应 · 已等待'), findsOneWidget);
+      expect(find.text('服务端尚未返回可展示的内容，收到后会在这里实时更新。'), findsOneWidget);
+      expect(find.text('回答草稿 · 正在生成，尚未完成'), findsNothing);
+      await tester.pumpWidget(const SizedBox.shrink());
+    },
+  );
+
+  testWidgets(
+    'tool targets, excerpts and search matches are shown before raw details',
+    (tester) async {
+      final controller = AgentController(autoConnect: false);
+      addTearDown(controller.dispose);
+      controller.traces = [
+        {
+          'id': 'read',
+          'kind': 'tool',
+          'name': 'read_file',
+          'status': 'completed',
+          'input': {'evidenceId': 'E1', 'startLine': 2, 'lineCount': 3},
+          'context': {'path': 'lib/main.dart'},
+          'output':
+              '{"path":"lib/main.dart","startLine":2,"endLine":4,"text":"void main() => runApp(App());"}',
+        },
+        {
+          'id': 'search',
+          'kind': 'tool',
+          'name': 'search_text',
+          'status': 'completed',
+          'input': {'query': 'runApp'},
+          'output':
+              '{"matches":[{"path":"lib/main.dart","line":2,"text":"runApp(App())"}],"limited":false}',
+        },
+      ];
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: ListView(
+              children: [TraceView(agent: controller, onExport: () {})],
+            ),
+          ),
+        ),
+      );
+      expect(find.text('读取：lib/main.dart · 第 2–4 行'), findsOneWidget);
+      expect(find.text('void main() => runApp(App());'), findsOneWidget);
+      expect(find.text('检索：runApp'), findsOneWidget);
+      expect(find.text('找到 1 处匹配'), findsOneWidget);
+      expect(find.text('lib/main.dart:2 · runApp(App())'), findsOneWidget);
       expect(tester.takeException(), isNull);
     },
   );

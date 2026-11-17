@@ -72,6 +72,7 @@ test('model reads actual file content, recovers from a failed calculation, and r
   assert.ok(events.some((event) => event.type === 'input.file_parsed' && event.payload.lines === 2));
   const read = state.traces.find((trace) => trace.name === 'read_file');
   assert.match(read.output, /24680/);
+  assert.equal(read.context.path, state.evidence[0].path);
   assert.equal(state.traces.find((trace) => trace.name === 'calculator').status, 'failed');
   assert.equal(events.find((event) => event.type === 'trace.started' && event.payload.trace.id === read.id).payload.trace.status, 'running');
   const saved = await readFile(join(run.directory, 'run.json'), 'utf8');
@@ -87,6 +88,25 @@ test('failed model request remains failed without replacing its answer with loca
   assert.equal(state.answer, '');
   assert.match(state.error, /injected network failure/);
   assert.equal(state.traces.at(-1).status, 'failed');
+});
+
+test('live public model progress is forwarded and kept in completed history', async (t) => {
+  const root = await scratch(t);
+  const events = [];
+  const provider = { generate: async (_instruction, _payload, _signal, delta) => {
+    delta(0, '', { phase: 'requesting' });
+    const text = '{"progress":"整理当前问题","answer":"正文草稿';
+    delta(text.length, text, { phase: 'streaming' });
+    assert.ok(events.some((event) => event.type === 'trace.delta' && event.payload.answerPreview === '正文草稿'));
+    return { progress: '整理当前问题', answer: '正文草稿完成' };
+  } };
+  const run = new AgentRun({ question: '写方案', sourceMode: 'text', mode: 'rwkv' }, root, (event) => events.push(event), { provider });
+  const state = await run.execute();
+  assert.equal(state.status, 'completed');
+  assert.equal(state.traces.at(-1).progress, '整理当前问题');
+  assert.equal(state.traces.at(-1).answerPreview, undefined);
+  const saved = JSON.parse(await readFile(join(run.directory, 'run.json'), 'utf8'));
+  assert.equal(saved.traces.at(-1).progress, '整理当前问题');
 });
 
 test('tool call limit terminates a repeated model loop without claiming completion', async (t) => {

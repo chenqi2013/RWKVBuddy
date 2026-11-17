@@ -8,11 +8,11 @@ import 'connection_settings.dart';
 import 'trace_view.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
 
-const ink = Color(0xFF202438);
-const accent = Color(0xFF6155D9);
-const muted = Color(0xFF767D90);
-const surface = Color(0xFFF6F7FB);
-const line = Color(0xFFE8EAF1);
+const ink = Color(0xFF252525);
+const accent = Color(0xFF252525);
+const muted = Color(0xFF8A8A8A);
+const surface = Color(0xFFF7F7F7);
+const line = Color(0xFFE8E8E8);
 
 void main() => runApp(const MyApp());
 
@@ -25,14 +25,76 @@ class MyApp extends StatelessWidget {
     debugShowCheckedModeBanner: false,
     theme: ThemeData(
       useMaterial3: true,
-      fontFamily: 'Microsoft YaHei',
-      colorScheme: ColorScheme.fromSeed(seedColor: accent),
-      scaffoldBackgroundColor: surface,
+      fontFamily: 'PingFang SC',
+      fontFamilyFallback: const ['Microsoft YaHei', 'Noto Sans CJK SC'],
+      colorScheme: ColorScheme.fromSeed(
+        seedColor: accent,
+        primary: accent,
+        onPrimary: Colors.white,
+        secondary: const Color(0xFF5D7067),
+        surface: Colors.white,
+        surfaceTint: Colors.transparent,
+        outline: line,
+      ),
+      scaffoldBackgroundColor: Colors.white,
       textTheme: const TextTheme(
-        bodyMedium: TextStyle(color: ink, height: 1.6),
-        bodySmall: TextStyle(color: muted, height: 1.5),
+        bodyLarge: TextStyle(color: ink, fontSize: 14, height: 1.7),
+        bodyMedium: TextStyle(color: ink, fontSize: 13, height: 1.65),
+        bodySmall: TextStyle(color: muted, fontSize: 12, height: 1.6),
       ),
       dividerColor: line,
+      appBarTheme: const AppBarTheme(
+        backgroundColor: Colors.white,
+        surfaceTintColor: Colors.transparent,
+        foregroundColor: ink,
+        elevation: 0,
+        titleTextStyle: TextStyle(
+          color: ink,
+          fontSize: 16,
+          fontWeight: FontWeight.w600,
+        ),
+      ),
+      tooltipTheme: const TooltipThemeData(
+        waitDuration: Duration(milliseconds: 500),
+      ),
+      iconButtonTheme: IconButtonThemeData(
+        style: IconButton.styleFrom(
+          foregroundColor: const Color(0xFF666666),
+          hoverColor: const Color(0xFFF0F0F0),
+        ),
+      ),
+      textButtonTheme: TextButtonThemeData(
+        style: TextButton.styleFrom(
+          foregroundColor: const Color(0xFF646464),
+          textStyle: const TextStyle(fontSize: 12),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+        ),
+      ),
+      filledButtonTheme: FilledButtonThemeData(
+        style: FilledButton.styleFrom(
+          backgroundColor: ink,
+          foregroundColor: Colors.white,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(10),
+          ),
+        ),
+      ),
+      outlinedButtonTheme: OutlinedButtonThemeData(
+        style: OutlinedButton.styleFrom(
+          foregroundColor: ink,
+          side: const BorderSide(color: line),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(10),
+          ),
+        ),
+      ),
+      chipTheme: ChipThemeData(
+        backgroundColor: surface,
+        selectedColor: const Color(0xFFECEEEE),
+        side: const BorderSide(color: line),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+        labelStyle: const TextStyle(color: ink, fontSize: 12),
+      ),
       inputDecorationTheme: InputDecorationTheme(
         filled: true,
         fillColor: Colors.white,
@@ -44,7 +106,12 @@ class MyApp extends StatelessWidget {
           borderRadius: BorderRadius.circular(12),
           borderSide: const BorderSide(color: line),
         ),
-        contentPadding: const EdgeInsets.all(14),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: const BorderSide(color: Color(0xFFB0B0B0)),
+        ),
+        hintStyle: const TextStyle(color: Color(0xFFA0A0A0), fontSize: 14),
+        contentPadding: const EdgeInsets.all(16),
       ),
     ),
     home: WorkspacePage(controller: controller),
@@ -66,6 +133,9 @@ class _WorkspacePageState extends State<WorkspacePage>
   String _lastRunId = '';
   bool _scrollQueued = false;
   bool _exiting = false;
+  bool _sidebarOpen = true;
+  int _category = 0;
+  final promptFocus = FocusNode();
   @override
   void initState() {
     super.initState();
@@ -88,6 +158,7 @@ class _WorkspacePageState extends State<WorkspacePage>
     WidgetsBinding.instance.removeObserver(this);
     agent.removeListener(_followConversation);
     if (widget.controller == null) agent.dispose();
+    promptFocus.dispose();
     prompt.dispose();
     contentScroll.dispose();
     super.dispose();
@@ -96,7 +167,7 @@ class _WorkspacePageState extends State<WorkspacePage>
   void _followConversation() {
     final changed = agent.runId != _lastRunId;
     _lastRunId = agent.runId;
-    if (_scrollQueued) return;
+    if (_scrollQueued || (!agent.busy && !changed)) return;
     if (!changed &&
         contentScroll.hasClients &&
         contentScroll.position.maxScrollExtent - contentScroll.offset > 100) {
@@ -106,7 +177,13 @@ class _WorkspacePageState extends State<WorkspacePage>
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _scrollQueued = false;
       if (mounted && contentScroll.hasClients) {
-        contentScroll.jumpTo(contentScroll.position.maxScrollExtent);
+        // Preserve the process being viewed when the final answer arrives.
+        // Reopened history starts with its records instead of hiding them below the fold.
+        if (agent.busy) {
+          contentScroll.jumpTo(contentScroll.position.maxScrollExtent);
+        } else if (changed) {
+          contentScroll.jumpTo(0);
+        }
       }
     });
   }
@@ -197,12 +274,11 @@ class _WorkspacePageState extends State<WorkspacePage>
     animation: agent,
     builder: (context, _) => LayoutBuilder(
       builder: (context, constraints) {
-        final wide = constraints.maxWidth >= 1080;
-        final sidebar = constraints.maxWidth >= 880;
+        final sidebar = constraints.maxWidth >= 880 && _sidebarOpen;
         return Scaffold(
           body: Row(
             children: [
-              if (sidebar) SizedBox(width: 214, child: _sidebar()),
+              if (sidebar) SizedBox(width: 248, child: _sidebar()),
               Expanded(
                 child: Column(
                   children: [
@@ -210,24 +286,7 @@ class _WorkspacePageState extends State<WorkspacePage>
                     if (agent.error.isNotEmpty) _message(agent.error, true),
                     if (agent.notice.isNotEmpty) _message(agent.notice, false),
                     Expanded(
-                      child: Padding(
-                        padding: EdgeInsets.fromLTRB(
-                          wide ? 30 : 18,
-                          20,
-                          wide ? 28 : 18,
-                          0,
-                        ),
-                        child: Column(
-                          children: [
-                            Expanded(
-                              child: agent.run == null
-                                  ? _welcome()
-                                  : _runContent(),
-                            ),
-                            _composer(),
-                          ],
-                        ),
-                      ),
+                      child: agent.run == null ? _welcome() : _taskWorkspace(),
                     ),
                   ],
                 ),
@@ -239,75 +298,126 @@ class _WorkspacePageState extends State<WorkspacePage>
     ),
   );
 
+  void _newTask() {
+    agent.newTask();
+    prompt.clear();
+    promptFocus.requestFocus();
+  }
+
   Widget _sidebar() => Container(
-    color: const Color(0xFF1E2235),
-    padding: const EdgeInsets.fromLTRB(18, 27, 18, 18),
+    decoration: const BoxDecoration(
+      color: surface,
+      border: Border(right: BorderSide(color: line)),
+    ),
     child: Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        const Row(
-          children: [
-            Icon(Icons.hub_rounded, color: Color(0xFFB9B2FF), size: 29),
-            SizedBox(width: 9),
-            Expanded(
-              child: Text(
-                'RWKVBuddy',
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  color: Colors.white,
-                  fontSize: 18,
-                  fontWeight: FontWeight.w700,
+        Padding(
+          padding: const EdgeInsets.fromLTRB(21, 21, 13, 12),
+          child: Row(
+            children: [
+              const Expanded(
+                child: Text(
+                  'RWKVBuddy',
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: -.3,
+                  ),
+                ),
+              ),
+              IconButton(
+                tooltip: '收起侧栏',
+                onPressed: () => setState(() => _sidebarOpen = false),
+                icon: const Icon(Icons.space_dashboard_outlined, size: 18),
+              ),
+            ],
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12),
+          child: Material(
+            color: const Color(0xFFECECEC),
+            borderRadius: BorderRadius.circular(9),
+            child: InkWell(
+              borderRadius: BorderRadius.circular(9),
+              onTap: agent.busy ? null : _newTask,
+              child: const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 13, vertical: 11),
+                child: Row(
+                  children: [
+                    Icon(Icons.add_circle_outline_rounded, size: 18),
+                    SizedBox(width: 10),
+                    Text(
+                      '新建任务',
+                      style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
                 ),
               ),
             ),
-          ],
+          ),
         ),
         const Padding(
-          padding: EdgeInsets.only(left: 38, top: 3),
-          child: Text(
-            '你的文件处理助手',
-            style: TextStyle(color: Color(0xFFA7ADC5), fontSize: 11),
+          padding: EdgeInsets.fromLTRB(25, 20, 20, 18),
+          child: Row(
+            children: [
+              Icon(
+                Icons.auto_awesome_outlined,
+                size: 17,
+                color: Color(0xFF686868),
+              ),
+              SizedBox(width: 10),
+              Text('文件助手', style: TextStyle(fontSize: 13)),
+              Spacer(),
+              Text('桌面版', style: TextStyle(fontSize: 10, color: muted)),
+            ],
           ),
         ),
-        const SizedBox(height: 33),
-        SizedBox(
-          width: double.infinity,
-          child: FilledButton.icon(
-            onPressed: agent.busy
-                ? null
-                : () {
-                    agent.newTask();
-                    prompt.clear();
-                  },
-            icon: const Icon(Icons.add, size: 18),
-            label: const Text('新建任务'),
-            style: FilledButton.styleFrom(
-              backgroundColor: accent,
-              padding: const EdgeInsets.symmetric(vertical: 17),
-            ),
-          ),
+        const Padding(
+          padding: EdgeInsets.fromLTRB(25, 15, 20, 12),
+          child: Text('最近任务', style: TextStyle(color: muted, fontSize: 11)),
         ),
-        const SizedBox(height: 30),
-        const Text(
-          '最近的任务',
-          style: TextStyle(color: Color(0xFF969EB9), fontSize: 11),
-        ),
-        const SizedBox(height: 10),
         Expanded(
           child: agent.history.isEmpty
-              ? const Text(
-                  '完成的任务会保存在这里',
-                  style: TextStyle(color: Color(0xFF969EB9), fontSize: 12),
+              ? const Padding(
+                  padding: EdgeInsets.fromLTRB(22, 45, 22, 0),
+                  child: Column(
+                    children: [
+                      Icon(
+                        Icons.chat_bubble_outline_rounded,
+                        size: 24,
+                        color: Color(0xFFC4C4C4),
+                      ),
+                      SizedBox(height: 13),
+                      Text(
+                        '从一个想法开始',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: Color(0xFF666666),
+                        ),
+                      ),
+                      SizedBox(height: 5),
+                      Text(
+                        '你的任务会保存在这里',
+                        style: TextStyle(fontSize: 11, color: muted),
+                      ),
+                    ],
+                  ),
                 )
               : ListView.builder(
+                  padding: const EdgeInsets.symmetric(horizontal: 12),
                   itemCount: agent.history.length,
                   itemBuilder: (_, index) {
                     final item = agent.history[index];
                     return Padding(
-                      padding: const EdgeInsets.only(bottom: 7),
+                      padding: const EdgeInsets.only(bottom: 4),
                       child: Material(
                         color: item['id'] == agent.runId
-                            ? const Color(0xFF34384F)
+                            ? const Color(0xFFEAEAEA)
                             : Colors.transparent,
                         borderRadius: BorderRadius.circular(9),
                         child: InkWell(
@@ -316,7 +426,10 @@ class _WorkspacePageState extends State<WorkspacePage>
                               ? null
                               : () => agent.load(item['id'] as String),
                           child: Padding(
-                            padding: const EdgeInsets.all(11),
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 13,
+                              vertical: 11,
+                            ),
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
@@ -325,16 +438,15 @@ class _WorkspacePageState extends State<WorkspacePage>
                                   maxLines: 2,
                                   overflow: TextOverflow.ellipsis,
                                   style: const TextStyle(
-                                    color: Color(0xFFE2E5F0),
                                     fontSize: 12,
-                                    height: 1.5,
+                                    height: 1.6,
                                   ),
                                 ),
-                                const SizedBox(height: 5),
+                                const SizedBox(height: 4),
                                 Text(
                                   statusLabel(item['status'] as String?),
                                   style: const TextStyle(
-                                    color: Color(0xFF969EB9),
+                                    color: muted,
                                     fontSize: 10,
                                   ),
                                 ),
@@ -347,83 +459,132 @@ class _WorkspacePageState extends State<WorkspacePage>
                   },
                 ),
         ),
-        const Divider(color: Color(0xFF373B50)),
-        TextButton.icon(
-          onPressed: agent.busy ? null : _settings,
-          icon: const Icon(
-            Icons.dns_outlined,
-            color: Color(0xFFB9B2FF),
-            size: 18,
+        const Divider(height: 1),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(17, 12, 14, 14),
+          child: Row(
+            children: [
+              Container(
+                width: 30,
+                height: 30,
+                decoration: BoxDecoration(
+                  color: const Color(0xFFE5E9E6),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: const Icon(
+                  Icons.hub_outlined,
+                  size: 17,
+                  color: Color(0xFF52675A),
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      '我的工作空间',
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                    const SizedBox(height: 3),
+                    Row(
+                      children: [
+                        Icon(
+                          Icons.circle,
+                          size: 5,
+                          color: agent.connected
+                              ? const Color(0xFF779783)
+                              : const Color(0xFFC89863),
+                        ),
+                        const SizedBox(width: 5),
+                        Text(
+                          agent.connected ? '服务已连接' : '服务未连接',
+                          style: const TextStyle(fontSize: 10, color: muted),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+              IconButton(
+                tooltip: '远端连接',
+                onPressed: agent.busy ? null : _settings,
+                icon: const Icon(Icons.settings_outlined, size: 18),
+              ),
+            ],
           ),
-          label: const Text('远端连接', style: TextStyle(color: Color(0xFFE2E5F0))),
         ),
-        const SizedBox(height: 12),
-        Row(
+      ],
+    ),
+  );
+
+  Widget _header(bool sidebar) => SizedBox(
+    height: 64,
+    child: Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 20),
+      child: Row(
+        children: [
+          if (!sidebar) ...[
+            IconButton(
+              tooltip: MediaQuery.sizeOf(context).width < 880 ? '任务记录' : '展开侧栏',
+              onPressed: MediaQuery.sizeOf(context).width < 880
+                  ? (agent.busy ? null : _showHistory)
+                  : () => setState(() => _sidebarOpen = true),
+              icon: const Icon(Icons.space_dashboard_outlined, size: 19),
+            ),
+            const SizedBox(width: 4),
+          ],
+          if (agent.run != null)
+            Expanded(
+              child: Text(
+                agent.run!['question'] as String? ?? '文件助手',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(fontSize: 13, color: Color(0xFF626262)),
+              ),
+            )
+          else
+            const Spacer(),
+          IconButton(
+            tooltip: '远端连接设置',
+            onPressed: agent.busy ? null : _settings,
+            icon: const Icon(Icons.tune_rounded, size: 19),
+          ),
+        ],
+      ),
+    ),
+  );
+
+  Widget _taskWorkspace() => Align(
+    alignment: Alignment.topCenter,
+    child: ConstrainedBox(
+      constraints: const BoxConstraints(maxWidth: 920),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 28),
+        child: Column(
           children: [
-            Icon(
-              Icons.circle,
-              size: 7,
-              color: agent.connected
-                  ? const Color(0xFF71D5B1)
-                  : const Color(0xFFFFBB82),
-            ),
-            const SizedBox(width: 8),
-            Text(
-              agent.connected ? '本地执行服务已连接' : '本地服务未连接',
-              style: const TextStyle(color: Color(0xFFB3BAD2), fontSize: 11),
-            ),
+            Expanded(child: _runContent()),
+            const SizedBox(height: 8),
+            _composer(),
+            _footnote(),
           ],
         ),
-        if (!agent.connected)
-          TextButton(onPressed: agent.connect, child: const Text('重新连接')),
-        const SizedBox(height: 6),
-      ],
+      ),
     ),
   );
-  Widget _header(bool sidebar) => Container(
-    color: Colors.white,
-    padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 15),
-    child: Row(
-      children: [
-        if (!sidebar) ...[
-          const Icon(Icons.hub_rounded, color: accent),
-          const SizedBox(width: 8),
-        ],
-        const Expanded(
-          child: Text(
-            '文件助手',
-            style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
-          ),
-        ),
-        if (!sidebar)
-          IconButton(
-            tooltip: '任务记录',
-            onPressed: agent.busy ? null : _showHistory,
-            icon: const Icon(Icons.history, size: 21),
-          ),
-        Flexible(
-          child: TextButton.icon(
-            onPressed: agent.busy ? null : _settings,
-            icon: Icon(
-              agent.mode == 'local' ? Icons.computer : Icons.cloud_outlined,
-              size: 17,
-            ),
-            label: Text(
-              agent.connectionLabel,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-            ),
-          ),
-        ),
-        const SizedBox(width: 8),
-        IconButton(
-          tooltip: '远端连接设置',
-          onPressed: agent.busy ? null : _settings,
-          icon: const Icon(Icons.tune, size: 21),
-        ),
-      ],
+
+  Widget _footnote() => const Padding(
+    padding: EdgeInsets.only(top: 11, bottom: 14),
+    child: Text(
+      '内容由 AI 生成，请核实重要信息',
+      textAlign: TextAlign.center,
+      style: TextStyle(fontSize: 10, color: Color(0xFFB4B4B4)),
     ),
   );
+
   Widget _message(String text, bool isError) => Container(
     width: double.infinity,
     color: isError ? const Color(0xFFFFF0ED) : const Color(0xFFEDF8F3),
@@ -451,233 +612,231 @@ class _WorkspacePageState extends State<WorkspacePage>
       ],
     ),
   );
-  Widget _welcome() => ListView(
-    children: [
-      const SizedBox(height: 34),
-      const Align(
-        alignment: Alignment.centerLeft,
-        child: DecoratedBox(
-          decoration: BoxDecoration(
-            color: Color(0xFFECE9FC),
-            borderRadius: BorderRadius.all(Radius.circular(14)),
-          ),
-          child: Padding(
-            padding: EdgeInsets.all(14),
-            child: Icon(Icons.auto_awesome, size: 30, color: accent),
-          ),
-        ),
-      ),
-      const SizedBox(height: 23),
-      const Text(
-        '今天想分析什么？',
-        style: TextStyle(
-          color: ink,
-          fontSize: 28,
-          height: 1.45,
-          fontWeight: FontWeight.w700,
-          letterSpacing: -0.7,
-        ),
-      ),
-      const SizedBox(height: 14),
-      const Text(
-        '直接提问，或添加文档、表格和项目资料。\n展示读取、分析和工具调用过程，直接查看回答和生成文件。',
-        style: TextStyle(color: muted, fontSize: 13, height: 1.9),
-      ),
-      const SizedBox(height: 29),
-      _example(
-        Icons.analytics_outlined,
-        '经营与资金分析',
-        '分析三家公司的经营与资金情况，指出异常并给我一份报告。',
-        sample: true,
-      ),
-      const SizedBox(height: 10),
-      _example(
-        Icons.folder_open_outlined,
-        '研究一个工作区',
-        '分析这个项目的结构、技术栈和潜在风险，整理一份有来源的报告。',
-      ),
-      const SizedBox(height: 20),
-      Text(
-        agent.mode == 'local'
-            ? '当前使用本地规则与真实工具，无需模型凭据。切换到远端模型可按要求分析、修改并生成文件。'
-            : '当前使用真实远端模型会话。请确认服务地址、协议和访问凭据后发起任务。',
-        style: const TextStyle(color: muted, fontSize: 11, height: 1.7),
-      ),
-      const SizedBox(height: 20),
-    ],
-  );
-  Widget _example(
-    IconData icon,
-    String title,
-    String text, {
-    bool sample = false,
-  }) => Material(
-    color: Colors.white,
-    borderRadius: BorderRadius.circular(13),
-    child: InkWell(
-      borderRadius: BorderRadius.circular(13),
-      onTap: () {
-        if (sample) agent.useSample();
-        prompt.text = text;
-      },
-      child: Padding(
-        padding: const EdgeInsets.all(17),
-        child: Row(
-          children: [
-            Icon(icon, size: 22, color: accent),
-            const SizedBox(width: 14),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    title,
-                    style: const TextStyle(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    text,
-                    style: const TextStyle(
-                      color: muted,
-                      fontSize: 11,
-                      height: 1.6,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(width: 8),
-            const Icon(Icons.north_west, size: 16, color: muted),
-          ],
-        ),
-      ),
-    ),
-  );
-  Widget _composer() => Padding(
-    padding: const EdgeInsets.only(top: 13, bottom: 17),
-    child: Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(
-          children: [
-            Icon(
-              agent.sourceMode == 'files'
-                  ? Icons.attach_file
-                  : Icons.folder_outlined,
-              size: 15,
-              color: muted,
-            ),
-            const SizedBox(width: 6),
-            Expanded(
-              child: Tooltip(
-                message: agent.sourceMode == 'files'
-                    ? agent.selectedFiles.join('\n')
-                    : agent.workspace,
-                child: Text(
-                  agent.sourceMode == 'files'
-                      ? '已添加 ${agent.selectedFiles.length} 个文件'
-                      : agent.workspace.isEmpty
-                      ? '可直接提问，也可添加资料'
-                      : agent.workspace,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(color: muted, fontSize: 10),
-                ),
-              ),
-            ),
-            TextButton.icon(
-              key: const Key('add-files'),
-              onPressed: agent.busy ? null : chooseFiles,
-              icon: const Icon(Icons.add, size: 15),
-              label: const Text('添加文件', style: TextStyle(fontSize: 11)),
-            ),
-            TextButton(
-              onPressed: agent.busy ? null : chooseDirectory,
-              child: const Text('选择目录', style: TextStyle(fontSize: 11)),
-            ),
-            TextButton(
-              onPressed: agent.busy ? null : agent.useSample,
-              child: const Text('内置样例', style: TextStyle(fontSize: 11)),
-            ),
-          ],
-        ),
-        if (agent.sourceMode == 'files' && agent.selectedFiles.isNotEmpty)
-          ConstrainedBox(
-            constraints: const BoxConstraints(maxHeight: 76),
-            child: SingleChildScrollView(
-              child: Align(
-                alignment: Alignment.centerLeft,
-                child: Wrap(
-                  spacing: 6,
-                  runSpacing: 4,
-                  children: agent.selectedFiles
-                      .map(
-                        (path) => Tooltip(
-                          message: path,
-                          child: InputChip(
-                            label: ConstrainedBox(
-                              constraints: const BoxConstraints(maxWidth: 180),
-                              child: Text(
-                                path.split(RegExp(r'[/\\]')).last,
-                                overflow: TextOverflow.ellipsis,
-                                style: const TextStyle(fontSize: 10),
-                              ),
-                            ),
-                            avatar: const Icon(
-                              Icons.insert_drive_file_outlined,
-                              size: 14,
-                            ),
-                            onDeleted: agent.busy
-                                ? null
-                                : () => agent.removeFile(path),
+  static const _categories = [
+    (Icons.edit_note_rounded, '文档处理', '对比这些文档，整理主要差异和风险，并生成一份 Word 报告。'),
+    (Icons.bar_chart_rounded, '数据分析', '分析这些表格中的关键数据、变化趋势和异常，整理结论。'),
+    (Icons.code_rounded, '代码研究', '这是一个什么工程？请分析它的功能、技术栈和目录结构。'),
+    (Icons.summarize_outlined, '内容总结', '总结这些资料的关键内容，提炼结论和待办事项。'),
+    (Icons.note_add_outlined, '生成报告', '根据这些资料生成一份结构清晰、包含结论和建议的 Word 报告。'),
+  ];
+
+  void _fillPrompt(String text) {
+    prompt.text = text;
+    promptFocus.requestFocus();
+  }
+
+  Widget _welcome() => LayoutBuilder(
+    builder: (context, constraints) {
+      final compact = constraints.maxWidth < 650 || constraints.maxHeight < 650;
+      return Column(
+        children: [
+          Expanded(
+            child: ListView(
+              padding: EdgeInsets.fromLTRB(24, compact ? 28 : 72, 24, 66),
+              children: [
+                Center(
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 800),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Text(
+                          'RWKVBuddy，我帮你',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            fontSize: compact ? 27 : 32,
+                            height: 1.4,
+                            fontWeight: FontWeight.w600,
+                            letterSpacing: -1.1,
                           ),
                         ),
-                      )
-                      .toList(),
+                        const SizedBox(height: 12),
+                        const Text(
+                          '读懂资料，整理想法，完成工作。',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(color: muted, fontSize: 13),
+                        ),
+                        SizedBox(height: compact ? 30 : 42),
+                        Wrap(
+                          spacing: 8,
+                          runSpacing: 8,
+                          children: [
+                            for (var i = 0; i < _categories.length; i++)
+                              _categoryChip(i),
+                          ],
+                        ),
+                        const SizedBox(height: 14),
+                        _composer(home: true),
+                        SizedBox(height: compact ? 25 : 38),
+                        const Padding(
+                          padding: EdgeInsets.only(left: 2, bottom: 12),
+                          child: Text(
+                            '试试这样开始',
+                            style: TextStyle(fontSize: 11, color: muted),
+                          ),
+                        ),
+                        Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            _suggestion(
+                              '对比两份合同，找出差异与风险',
+                              '请对比这两份合同，逐项列出差异、风险和修改建议。',
+                            ),
+                            _suggestion('这个工程用了哪些技术栈？', _categories[2].$3),
+                            _suggestion('把这些资料整理成一份报告', _categories[4].$3),
+                            _suggestion(
+                              '经营与资金分析',
+                              '分析三家公司的经营与资金情况，指出异常并给我一份报告。',
+                              sample: true,
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
                 ),
-              ),
+              ],
             ),
           ),
-        Padding(
-          padding: const EdgeInsets.only(bottom: 6),
-          child: Wrap(
-            spacing: 10,
-            crossAxisAlignment: WrapCrossAlignment.center,
+          _footnote(),
+        ],
+      );
+    },
+  );
+
+  Widget _categoryChip(int index) {
+    final item = _categories[index];
+    final selected = _category == index;
+    return Material(
+      color: selected ? const Color(0xFFF0F1F0) : const Color(0xFFFAFAFA),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(20),
+        side: BorderSide(color: selected ? const Color(0xFFD5D8D5) : line),
+      ),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(20),
+        onTap: () {
+          setState(() => _category = index);
+          if (index == 4) {
+            agent.generateFiles = true;
+            agent.update();
+          }
+          _fillPrompt(item.$3);
+        },
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 8),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
             children: [
-              FilterChip(
-                key: const Key('generate-files'),
-                label: const Text('生成文件', style: TextStyle(fontSize: 11)),
-                avatar: const Icon(Icons.note_add_outlined, size: 16),
-                selected: agent.generateFiles,
-                onSelected: agent.busy
-                    ? null
-                    : (value) {
-                        agent.generateFiles = value;
-                        agent.update();
-                      },
-              ),
-              const Text(
-                '可生成 Word、Excel、文本等新副本',
-                style: TextStyle(fontSize: 10, color: muted),
-              ),
+              Icon(item.$1, size: 15, color: const Color(0xFF656565)),
+              const SizedBox(width: 6),
+              Text(item.$2, style: const TextStyle(fontSize: 12)),
             ],
           ),
         ),
+      ),
+    );
+  }
+
+  Widget _suggestion(String label, String text, {bool sample = false}) =>
+      Padding(
+        padding: const EdgeInsets.only(bottom: 9),
+        child: Material(
+          color: Colors.white,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(22),
+            side: const BorderSide(color: line),
+          ),
+          child: InkWell(
+            borderRadius: BorderRadius.circular(22),
+            onTap: () {
+              if (sample) agent.useSample();
+              _fillPrompt(text);
+            },
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 10),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(label, style: const TextStyle(fontSize: 12)),
+                  const SizedBox(width: 12),
+                  const Icon(Icons.north_east_rounded, size: 13),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+
+  Widget _composer({bool home = false}) => Container(
+    decoration: BoxDecoration(
+      color: const Color(0xFFF6F6F6),
+      borderRadius: BorderRadius.circular(22),
+    ),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
         Container(
           decoration: BoxDecoration(
             color: Colors.white,
-            borderRadius: BorderRadius.circular(15),
-            border: Border.all(color: line),
+            borderRadius: BorderRadius.circular(22),
+            border: Border.all(color: const Color(0xFFE2E2E2)),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: .025),
+                blurRadius: 20,
+                offset: const Offset(0, 8),
+              ),
+            ],
           ),
-          padding: const EdgeInsets.fromLTRB(16, 6, 12, 12),
+          padding: const EdgeInsets.fromLTRB(17, 9, 13, 10),
           child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
+              if (agent.sourceMode == 'files' && agent.selectedFiles.isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.only(top: 5),
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(maxHeight: 72),
+                    child: SingleChildScrollView(
+                      child: Wrap(
+                        spacing: 6,
+                        runSpacing: 4,
+                        children: agent.selectedFiles
+                            .map(
+                              (path) => Tooltip(
+                                message: path,
+                                child: InputChip(
+                                  label: ConstrainedBox(
+                                    constraints: const BoxConstraints(
+                                      maxWidth: 170,
+                                    ),
+                                    child: Text(
+                                      path.split(RegExp(r'[/\\]')).last,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: const TextStyle(fontSize: 11),
+                                    ),
+                                  ),
+                                  avatar: const Icon(
+                                    Icons.insert_drive_file_outlined,
+                                    size: 15,
+                                  ),
+                                  onDeleted: agent.busy
+                                      ? null
+                                      : () => agent.removeFile(path),
+                                ),
+                              ),
+                            )
+                            .toList(),
+                      ),
+                    ),
+                  ),
+                ),
               Shortcuts(
                 shortcuts: const {
                   SingleActivator(LogicalKeyboardKey.enter, control: true):
+                      ActivateIntent(),
+                  SingleActivator(LogicalKeyboardKey.enter, meta: true):
                       ActivateIntent(),
                 },
                 child: Actions(
@@ -691,48 +850,120 @@ class _WorkspacePageState extends State<WorkspacePage>
                   },
                   child: TextField(
                     controller: prompt,
+                    focusNode: promptFocus,
                     enabled: true,
-                    minLines: 1,
-                    maxLines: 4,
-                    style: const TextStyle(fontSize: 13),
-                    decoration: const InputDecoration(
-                      hintText: '输入问题或继续追问…',
+                    minLines: home ? 3 : 1,
+                    maxLines: home ? 5 : 3,
+                    style: const TextStyle(fontSize: 14, height: 1.8),
+                    decoration: InputDecoration(
+                      hintText: home
+                          ? '今天帮你做些什么？添加文件，或直接说说你的想法…'
+                          : '继续提问，或告诉我需要怎样修改…',
                       filled: false,
                       border: InputBorder.none,
                       enabledBorder: InputBorder.none,
                       focusedBorder: InputBorder.none,
-                      contentPadding: EdgeInsets.symmetric(vertical: 12),
+                      contentPadding: const EdgeInsets.symmetric(vertical: 8),
                     ),
                   ),
                 ),
               ),
+              const SizedBox(height: 7),
               Row(
                 children: [
-                  const Icon(Icons.groups_2_outlined, size: 17, color: muted),
-                  const SizedBox(width: 6),
+                  IconButton(
+                    key: const Key('add-files'),
+                    tooltip: '添加文件',
+                    onPressed: agent.busy ? null : chooseFiles,
+                    icon: const Icon(Icons.add_rounded, size: 22),
+                    visualDensity: VisualDensity.compact,
+                  ),
+                  const SizedBox(width: 3),
+                  FilterChip(
+                    key: const Key('generate-files'),
+                    label: const Text('生成文件', style: TextStyle(fontSize: 11)),
+                    avatar: const Icon(Icons.note_add_outlined, size: 15),
+                    showCheckmark: false,
+                    selected: agent.generateFiles,
+                    side: BorderSide(
+                      color: agent.generateFiles
+                          ? const Color(0xFFD5DBD7)
+                          : Colors.transparent,
+                    ),
+                    backgroundColor: Colors.transparent,
+                    selectedColor: const Color(0xFFEEF2EF),
+                    padding: EdgeInsets.zero,
+                    visualDensity: VisualDensity.compact,
+                    onSelected: agent.busy
+                        ? null
+                        : (value) {
+                            agent.generateFiles = value;
+                            agent.update();
+                          },
+                  ),
                   Expanded(
-                    child: Text(
-                      agent.run == null ? '读取资料 · 分析处理 · 生成结果' : '继续追问将复用本轮资料',
-                      style: TextStyle(color: muted, fontSize: 11),
+                    child: Align(
+                      alignment: Alignment.centerRight,
+                      child: TextButton(
+                        onPressed: agent.busy ? null : _settings,
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(
+                              agent.mode == 'local'
+                                  ? Icons.computer_outlined
+                                  : Icons.language_rounded,
+                              size: 14,
+                            ),
+                            const SizedBox(width: 6),
+                            Flexible(
+                              child: Text(
+                                agent.connectionLabel,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(fontSize: 11),
+                              ),
+                            ),
+                            const SizedBox(width: 3),
+                            const Icon(
+                              Icons.keyboard_arrow_down_rounded,
+                              size: 14,
+                            ),
+                          ],
+                        ),
+                      ),
                     ),
                   ),
+                  const SizedBox(width: 7),
                   if (agent.busy)
-                    OutlinedButton.icon(
+                    IconButton.filled(
+                      tooltip: '停止任务',
                       onPressed: agent.cancel,
-                      icon: const Icon(Icons.stop_rounded, size: 17),
-                      label: const Text('停止任务'),
+                      style: IconButton.styleFrom(
+                        backgroundColor: ink,
+                        foregroundColor: Colors.white,
+                        minimumSize: const Size(34, 34),
+                      ),
+                      icon: const Icon(Icons.stop_rounded, size: 18),
                     )
                   else
-                    FilledButton.icon(
-                      onPressed: agent.connected ? submit : null,
-                      icon: const Icon(Icons.arrow_upward_rounded, size: 17),
-                      label: Text(agent.run == null ? '开始处理' : '发送追问'),
-                      style: FilledButton.styleFrom(
-                        backgroundColor: accent,
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 18,
-                          vertical: 15,
+                    ValueListenableBuilder<TextEditingValue>(
+                      valueListenable: prompt,
+                      builder: (context, value, _) => IconButton.filled(
+                        key: const Key('send-message'),
+                        tooltip: agent.run == null ? '开始处理' : '发送追问',
+                        onPressed:
+                            agent.connected && value.text.trim().isNotEmpty
+                            ? submit
+                            : null,
+                        style: IconButton.styleFrom(
+                          backgroundColor: ink,
+                          foregroundColor: Colors.white,
+                          disabledBackgroundColor: const Color(0xFFD8D8D8),
+                          disabledForegroundColor: Colors.white,
+                          minimumSize: const Size(34, 34),
                         ),
+                        icon: const Icon(Icons.arrow_upward_rounded, size: 20),
                       ),
                     ),
                 ],
@@ -740,11 +971,61 @@ class _WorkspacePageState extends State<WorkspacePage>
             ],
           ),
         ),
-        const SizedBox(height: 6),
-        const Center(
-          child: Text(
-            'PDF / DOCX / XLSX / 文本 · 最多 20 个文件 · Ctrl + Enter 发送',
-            style: TextStyle(fontSize: 10, color: muted),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(13, 2, 13, 4),
+          child: Row(
+            children: [
+              Flexible(
+                child: TextButton.icon(
+                  onPressed: agent.busy ? null : chooseDirectory,
+                  icon: const Icon(Icons.folder_open_outlined, size: 14),
+                  label: Text(
+                    agent.sourceMode == 'directory' &&
+                            agent.workspace.isNotEmpty
+                        ? agent.workspace.split(RegExp(r'[/\\]')).last
+                        : '选择目录',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontSize: 11),
+                  ),
+                ),
+              ),
+              PopupMenuButton<String>(
+                tooltip: '资料选项',
+                enabled: !agent.busy,
+                icon: const Icon(Icons.keyboard_arrow_down_rounded, size: 14),
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(minWidth: 145),
+                itemBuilder: (_) => [
+                  const PopupMenuItem(value: 'files', child: Text('添加文件')),
+                  const PopupMenuItem(value: 'directory', child: Text('选择目录')),
+                  const PopupMenuItem(value: 'sample', child: Text('内置样例')),
+                ],
+                onSelected: (value) {
+                  if (value == 'files') {
+                    chooseFiles();
+                  } else if (value == 'directory') {
+                    chooseDirectory();
+                  } else {
+                    agent.useSample();
+                  }
+                },
+              ),
+              Expanded(
+                child: Text(
+                  agent.sourceMode == 'files' && agent.selectedFiles.isNotEmpty
+                      ? '${agent.selectedFiles.length} 个附件'
+                      : agent.run != null
+                      ? '复用本轮资料'
+                      : '支持文档、表格与代码',
+                  maxLines: 1,
+                  textAlign: TextAlign.right,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(fontSize: 10, color: muted),
+                ),
+              ),
+              const SizedBox(width: 8),
+            ],
           ),
         ),
       ],
@@ -754,7 +1035,7 @@ class _WorkspacePageState extends State<WorkspacePage>
   Widget _runContent() => Column(
     crossAxisAlignment: CrossAxisAlignment.start,
     children: [
-      const SizedBox(height: 10),
+      const SizedBox(height: 4),
       Row(
         children: [
           Expanded(
@@ -772,7 +1053,11 @@ class _WorkspacePageState extends State<WorkspacePage>
       if (agent.busy)
         const Padding(
           padding: EdgeInsets.only(top: 10),
-          child: LinearProgressIndicator(minHeight: 2),
+          child: LinearProgressIndicator(
+            minHeight: 1,
+            color: Color(0xFF96A69A),
+            backgroundColor: surface,
+          ),
         ),
       const SizedBox(height: 10),
       Expanded(
@@ -792,11 +1077,11 @@ class _WorkspacePageState extends State<WorkspacePage>
         Align(
           alignment: Alignment.centerRight,
           child: Container(
-            constraints: const BoxConstraints(maxWidth: 740),
+            constraints: const BoxConstraints(maxWidth: 620),
             margin: const EdgeInsets.only(bottom: 14, top: 8),
             padding: const EdgeInsets.all(16),
             decoration: BoxDecoration(
-              color: const Color(0xFFECE9FC),
+              color: const Color(0xFFF2F2F2),
               borderRadius: BorderRadius.circular(14),
             ),
             child: SelectableText(
@@ -806,7 +1091,7 @@ class _WorkspacePageState extends State<WorkspacePage>
           ),
         ),
         Container(
-          padding: const EdgeInsets.all(19),
+          padding: const EdgeInsets.symmetric(vertical: 16),
           margin: const EdgeInsets.only(bottom: 18),
           decoration: BoxDecoration(
             color: Colors.white,
@@ -817,7 +1102,11 @@ class _WorkspacePageState extends State<WorkspacePage>
             children: [
               const Row(
                 children: [
-                  Icon(Icons.hub_outlined, color: accent, size: 19),
+                  Icon(
+                    Icons.auto_awesome_outlined,
+                    color: Color(0xFF56685C),
+                    size: 18,
+                  ),
                   SizedBox(width: 8),
                   Text(
                     'RWKVBuddy',
@@ -835,7 +1124,7 @@ class _WorkspacePageState extends State<WorkspacePage>
                   (turn['report'] as String? ?? '').isNotEmpty) ...[
                 const Text(
                   '生成结果',
-                  style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
                 ),
                 const SizedBox(height: 10),
                 MarkdownBody(
@@ -843,6 +1132,39 @@ class _WorkspacePageState extends State<WorkspacePage>
                       ? turn['answer'] as String
                       : turn['report'] as String? ?? '',
                   selectable: true,
+                  styleSheet: MarkdownStyleSheet.fromTheme(Theme.of(context))
+                      .copyWith(
+                        p: const TextStyle(
+                          fontSize: 14,
+                          height: 1.9,
+                          color: ink,
+                        ),
+                        h1: const TextStyle(
+                          fontSize: 24,
+                          height: 1.7,
+                          fontWeight: FontWeight.w600,
+                        ),
+                        h2: const TextStyle(
+                          fontSize: 19,
+                          height: 1.7,
+                          fontWeight: FontWeight.w600,
+                        ),
+                        h3: const TextStyle(
+                          fontSize: 16,
+                          height: 1.7,
+                          fontWeight: FontWeight.w600,
+                        ),
+                        code: const TextStyle(
+                          fontFamily: 'Menlo',
+                          fontSize: 12,
+                          backgroundColor: surface,
+                        ),
+                        codeblockDecoration: BoxDecoration(
+                          color: surface,
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        blockSpacing: 14,
+                      ),
                 ),
               ] else if (turn['status'] != 'running')
                 Text(

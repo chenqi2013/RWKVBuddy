@@ -8,6 +8,7 @@ import { connection, listModels } from './src/connection.mjs';
 import { Provider } from './src/provider.mjs';
 import { Pool } from './src/runtime.mjs';
 import { defaultConnection } from './src/defaults.mjs';
+import { promptWorkspace } from './src/project-workspace.mjs';
 
 const legacyMacRoot = join(homedir(), '.local', 'share', 'RWKVBuddy', 'runs');
 const dataRoot = process.env.RWKVBUDDY_DATA_DIR || (process.platform === 'darwin' && existsSync(legacyMacRoot) ? legacyMacRoot :
@@ -98,6 +99,9 @@ function processCommand(command) {
             command.selectedFiles = parent.selectedFiles || [];
             command.workspace = parent.workspace || '';
           }
+        }
+        if (promptWorkspace(command.question)) {
+          command.sourceMode = 'text';
         }
         if (command.sourceMode === 'files') {
           if (!Array.isArray(command.selectedFiles) || !command.selectedFiles.length || command.selectedFiles.length > 20 ||

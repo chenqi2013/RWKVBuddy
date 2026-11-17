@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:async';
 import 'dart:io';
 import 'dart:ui' as ui;
 
@@ -49,6 +50,7 @@ void main() {
       var round = 0;
       var previousContentSeen = false;
       var toolContentSeen = false;
+      final continueModel = Completer<void>();
       server.listen((request) async {
         final body = jsonDecode(await utf8.decoder.bind(request).join()) as Map;
         final content = body['messages'][1]['content'] as String;
@@ -75,6 +77,7 @@ void main() {
             ).contains('预算 200 元');
           }
           answer = {
+            'progress': '正在依据合同原文整理修订内容。',
             'answer': '已按要求修改预算并生成新文件。',
             'files': [
               {
@@ -84,22 +87,39 @@ void main() {
             ],
           };
         }
-        request.response.headers.contentType = ContentType.json;
-        request.response.write(
-          jsonEncode({
+        request.response.headers.contentType = ContentType(
+          'text',
+          'event-stream',
+          charset: 'utf-8',
+        );
+        request.response.bufferOutput = false;
+        final encoded = jsonEncode(answer);
+        void chunk(String content) => request.response.write(
+          'data: ${jsonEncode({
             'choices': [
               {
-                'message': {'content': jsonEncode(answer)},
+                'delta': {'content': content},
               },
             ],
-          }),
+          })}\n\n',
         );
+        if (round == 1 && answer.containsKey('files')) {
+          final split = encoded.indexOf(',"files"');
+          chunk(encoded.substring(0, split));
+          await request.response.flush();
+          await continueModel.future;
+          chunk(encoded.substring(split));
+        } else {
+          chunk(encoded);
+        }
+        request.response.write('data: [DONE]\n\n');
         await request.response.close();
       });
       final agent = AgentController(
         serviceEnvironment: {'RWKVBUDDY_DATA_DIR': '${root.path}/runs'},
       );
       addTearDown(() async {
+        if (!continueModel.isCompleted) continueModel.complete();
         await agent.shutdown();
         agent.dispose();
         await server.close(force: true);
@@ -113,13 +133,18 @@ void main() {
           child: MyApp(controller: agent),
         ),
       );
-      Future<void> waitUntil(bool Function() done) async {
+      Future<void> waitUntil(bool Function() done, {bool settle = true}) async {
         for (var i = 0; i < 200 && !done(); i++) {
           await tester.pump(const Duration(milliseconds: 100));
           await Future<void>.delayed(const Duration(milliseconds: 50));
         }
-        expect(done(), isTrue, reason: agent.error);
-        await tester.pumpAndSettle();
+        expect(
+          done(),
+          isTrue,
+          reason:
+              '${agent.error}; round=$round; ${agent.traces.map((trace) => {'name': trace['name'], 'status': trace['status'], 'phase': trace['phase'], 'characters': trace['characters'], 'progress': trace['progress'], 'answerPreview': trace['answerPreview']}).toList()}',
+        );
+        if (settle) await tester.pumpAndSettle();
       }
 
       await waitUntil(() => agent.connected);
@@ -138,7 +163,37 @@ void main() {
         find.byType(TextField).first,
         '把预算改为 200 元，生成 Word',
       );
-      await tester.tap(find.text('开始处理'));
+      await tester.pump();
+      await tester.tap(find.byKey(const Key('send-message')));
+      await waitUntil(
+        () => agent.traces.any(
+          (trace) => '${trace['answerPreview'] ?? ''}'.contains('已按要求修改预算'),
+        ),
+        settle: false,
+      );
+      await tester.pump();
+      expect(agent.busy, isTrue);
+      await waitUntil(
+        () => find.text('模型进度说明：正在依据合同原文整理修订内容。').evaluate().isNotEmpty,
+        settle: false,
+      );
+      expect(find.text('模型进度说明：正在依据合同原文整理修订内容。'), findsOneWidget);
+      expect(find.text('回答草稿 · 正在生成，尚未完成'), findsOneWidget);
+      await tester.ensureVisible(find.text('模型进度说明：正在依据合同原文整理修订内容。'));
+      await tester.pump();
+      final liveBoundary =
+          capture.currentContext!.findRenderObject()! as RenderRepaintBoundary;
+      final liveImage = await liveBoundary.toImage(pixelRatio: 1);
+      final liveBytes = await liveImage.toByteData(
+        format: ui.ImageByteFormat.png,
+      );
+      final liveScreenshot = File(
+        'build/ui-screenshots/live-model-progress.png',
+      );
+      await liveScreenshot.parent.create(recursive: true);
+      await liveScreenshot.writeAsBytes(liveBytes!.buffer.asUint8List());
+      liveImage.dispose();
+      continueModel.complete();
       await waitUntil(() => agent.run != null && !agent.busy);
       expect(agent.run!['status'], 'completed', reason: agent.error);
       expect(agent.run!['deliverables'], hasLength(1));
@@ -150,6 +205,7 @@ void main() {
       expect(find.text('专家成果'), findsNothing);
       final button = find.text('下载');
       await tester.ensureVisible(button);
+      await tester.pumpAndSettle();
       await tester.tap(button);
       await waitUntil(() => agent.notice.contains('成果文件已保存'));
       expect(await downloaded.exists(), isTrue);
@@ -164,6 +220,16 @@ void main() {
       await screenshot.parent.create(recursive: true);
       await screenshot.writeAsBytes(bytes!.buffer.asUint8List());
       image.dispose();
+      await tester.ensureVisible(find.text('处理过程'));
+      await tester.pumpAndSettle();
+      final processImage = await boundary.toImage(pixelRatio: 1);
+      final processBytes = await processImage.toByteData(
+        format: ui.ImageByteFormat.png,
+      );
+      await File(
+        'build/ui-screenshots/visible-process.png',
+      ).writeAsBytes(processBytes!.buffer.asUint8List());
+      processImage.dispose();
       agent.newTask();
       agent.load(firstId);
       await waitUntil(() => agent.runId == firstId);
@@ -173,7 +239,8 @@ void main() {
         find.byType(TextField).first,
         '把上一版预算改为 300 元，再生成 Word',
       );
-      await tester.tap(find.text('发送追问'));
+      await tester.pump();
+      await tester.tap(find.byKey(const Key('send-message')));
       await waitUntil(
         () => agent.runId != firstId && agent.run != null && !agent.busy,
       );

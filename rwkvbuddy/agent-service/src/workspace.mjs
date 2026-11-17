@@ -4,13 +4,13 @@ import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { checkAbort } from './runtime.mjs';
 
-const skip = new Set(['node_modules', 'build', 'dist', 'runs', 'vendor', 'target', 'runtime']);
-const extensions = new Set(['.md', '.txt', '.csv', '.tsv', '.json', '.jsonl', '.yaml', '.yml', '.dart', '.ts', '.js', '.mjs', '.py', '.toml', '.tsx', '.jsx', '.html', '.css', '.swift', '.kt', '.java', '.cpp', '.cc', '.c', '.h', '.rs', '.go', '.sh']);
+export const skip = new Set(['node_modules', 'build', 'dist', 'runs', 'vendor', 'target', 'runtime']);
+export const extensions = new Set(['.md', '.txt', '.csv', '.tsv', '.json', '.jsonl', '.yaml', '.yml', '.dart', '.ts', '.js', '.mjs', '.py', '.toml', '.tsx', '.jsx', '.html', '.css', '.swift', '.kt', '.java', '.cpp', '.cc', '.c', '.h', '.rs', '.go', '.sh']);
 export const hash = (text) => createHash('sha256').update(text).digest('hex');
 
 // Root documentation, manifests and entry points should reach the model before fixtures.
-const manifestNames = /^(pubspec\.yaml|package\.json|Cargo\.toml|pyproject\.toml|go\.mod|CMakeLists\.txt|Podfile|Dockerfile)$/i;
-function sourcePriority(path) {
+export const manifestNames = /^(pubspec\.yaml|package\.json|Cargo\.toml|pyproject\.toml|go\.mod|CMakeLists\.txt|Podfile|Dockerfile)$/i;
+export function sourcePriority(path) {
   const parts = path.split('/');
   const name = parts.at(-1);
   if (parts.length === 1 && /^readme(?:\.|$)/i.test(name)) return 0;
@@ -25,7 +25,7 @@ function sourcePriority(path) {
 
 // Use Git's ignore rules when available, including rules inherited from a parent repo.
 // Non-Git directories and machines without Git retain the normal filename exclusions.
-async function ignoredPaths(root, paths, signal) {
+export async function ignoredPaths(root, paths, signal) {
   if (!paths.length) return new Set();
   checkAbort(signal);
   return new Promise((resolveIgnored, reject) => {
@@ -51,7 +51,7 @@ async function ignoredPaths(root, paths, signal) {
   });
 }
 
-export async function scanWorkspace(path, signal) {
+export async function scanWorkspace(path, signal, send = () => {}) {
   const root = await realpath(resolve(path));
   const files = {};
   const warnings = [];
@@ -94,8 +94,11 @@ export async function scanWorkspace(path, signal) {
     total += buffer.length;
     const content = buffer.toString('utf8').replace(/^\uFEFF/, '');
     files[file.name] = { content, hash: hash(content), lines: content.split(/\r?\n/).length };
+    send('input.file_parsed', { name: file.name, path: file.name, lines: files[file.name].lines, bytes: buffer.length,
+      source: 'directory', summary: `已读入快照：${file.name} · ${files[file.name].lines} 行` });
   }
   if (!Object.keys(files).length) throw new Error('此目录没有可分析的文本文件，请选择工作目录或使用内置样例。');
+  send('input.scan_completed', { fileCount: Object.keys(files).length, warnings, summary: `目录读取完成：${Object.keys(files).length} 个文本文件` });
   const inputHashes = Object.fromEntries(Object.entries(files).map(([path, file]) => [path, file.hash]));
   return { root, files, warnings, inputHashes, snapshotHash: hash(JSON.stringify(inputHashes)) };
 }

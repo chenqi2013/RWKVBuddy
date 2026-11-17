@@ -170,7 +170,7 @@ class _ConnectionSettingsState extends State<ConnectionSettings> {
 
   @override
   Widget build(BuildContext context) => Scaffold(
-    backgroundColor: const Color(0xFFF7F8FA),
+    backgroundColor: Colors.white,
     appBar: AppBar(
       title: Text(
         editing == null

@@ -74,3 +74,31 @@ test('token-truncated streamed responses are reported separately from malformed 
   const provider = new Provider({ baseUrl, protocol: 'chat', model: 'test-model' }, new Pool(1));
   await assert.rejects(provider.generate('分析', {}, new AbortController().signal), (error) => error.code === 'MODEL_OUTPUT_TRUNCATED' && /截断/.test(error.message));
 });
+
+test('chat streams public content before request completion and ignores reasoning deltas', async (t) => {
+  let release;
+  const gate = new Promise((done) => { release = done; });
+  t.after(() => release());
+  const baseUrl = await server(t, async (request, response) => {
+    await body(request);
+    response.writeHead(200, { 'Content-Type': 'text/event-stream' });
+    response.write(`data: ${JSON.stringify({ choices: [{ delta: { reasoning_content: 'private reasoning' } }] })}\n\n`);
+    response.write(`data: ${JSON.stringify({ choices: [{ delta: { content: '{"progress":"核对资料","answer":"正在生成' } }] })}\n\n`);
+    await gate;
+    response.end(`data: ${JSON.stringify({ choices: [{ delta: { content: '正文"}' }, finish_reason: 'stop' }] })}\n\ndata: [DONE]\n\n`);
+  });
+  const phases = [];
+  let live;
+  const received = new Promise((done) => { live = done; });
+  const provider = new Provider({ baseUrl, protocol: 'chat', model: 'test-model' }, new Pool(1));
+  const pending = provider.generate('分析', {}, new AbortController().signal, (length, text, status) => {
+    phases.push(status.phase);
+    assert.ok(!text.includes('private reasoning'));
+    if (length > 0) live(text);
+  });
+  assert.match(await received, /正在生成/);
+  release();
+  const result = await pending;
+  assert.equal(result.answer, '正在生成正文');
+  assert.deepEqual(phases.slice(0, 4), ['queued', 'requesting', 'waiting', 'streaming']);
+});
