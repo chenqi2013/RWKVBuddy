@@ -4,7 +4,7 @@ import { connection, listModels } from './connection.mjs';
 export class Provider {
   constructor(config, pool) { this.config = config; this.pool = pool; }
   async resolveModel(signal) {
-    const specified = this.config.model?.trim() || process.env.FOREMAN_MODEL;
+    const specified = this.config.model?.trim() || (this.config.inferenceMode !== 'local' && process.env.FOREMAN_MODEL);
     if (specified) return specified;
     this.modelPromise ??= listModels(this.config, signal).then(({ models }) => {
       const model = models.find((id) => /qwen|千问/i.test(id)) || models[0];
@@ -38,19 +38,28 @@ export class Provider {
         ...(mode === 'rwkv' && config.stateId ? { state_id: config.stateId } : {}),
         ...(mode === 'rwkv' && config.adapterId ? { adapter_id: config.adapterId } : {}),
       };
-      const requestSignal = AbortSignal.any([signal, AbortSignal.timeout(120000)]);
+      const timeoutMs = config.inferenceMode === 'local' ? 600000 : 120000;
+      const requestSignal = AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]);
       let response;
       try {
         onDelta(0, '', { phase: 'requesting' });
         response = await fetch(target.endpoint, {
           method: 'POST', headers, body: JSON.stringify(body), signal: requestSignal,
+          redirect: config.inferenceMode === 'local' ? 'error' : 'follow',
         });
       } catch (error) {
         if (signal.aborted) throw error;
-        throw new Error('模型服务连接失败或超过 120 秒，请检查服务地址和网络。');
+        throw new Error(config.inferenceMode === 'local'
+          ? '本地模型服务连接失败或超过 600 秒，请确认服务已启动、模型已加载。'
+          : '模型服务连接失败或超过 120 秒，请检查服务地址和网络。');
       }
       if (!response.ok) {
         await response.body?.cancel();
+        if (config.inferenceMode === 'local') {
+          throw new Error(response.status === 429
+            ? '本地模型正在处理请求，请等待或停止其他任务后重试。'
+            : `本地模型 HTTP ${response.status}：请检查模型名称、请求参数及输入加输出 Token 是否超过服务的 --context-limit。`);
+        }
         throw new Error(`模型服务 HTTP ${response.status}，请检查服务协议、模型和凭据。`);
       }
       let text = '';

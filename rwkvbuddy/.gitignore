@@ -36,6 +36,9 @@ migrate_working_dir/
 /agent-service/node_modules/
 /agent-service/default-connection.json
 /docs/analysis/ziliao.txt
+/local-models/
+/agent-service/local-model/.venv/
+__pycache__/
 
 # Symbolication related
 app.*.symbols

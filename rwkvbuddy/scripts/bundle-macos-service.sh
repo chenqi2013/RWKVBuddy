@@ -13,6 +13,7 @@ if [ ! -d "$service_root/node_modules/docx" ] || [ ! -d "$service_root/node_modu
 fi
 mkdir -p "$destination"
 rsync -a --delete --exclude '/test/' --exclude '/default-connection.json' --exclude '/runtime/' \
+  --exclude '.venv' --exclude '__pycache__' --exclude 'test_server.py' \
   --exclude '.DS_Store' --exclude '._*' "$service_root/" "$destination/"
 mkdir -p "$destination/runtime"
 cp "$service_root/runtime/node" "$service_root/runtime/lua" "$destination/runtime/"

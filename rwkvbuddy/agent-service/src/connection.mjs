@@ -1,9 +1,14 @@
 import { defaultConnection } from './defaults.mjs';
 
 export function connection(config = {}) {
+  const local = config.inferenceMode === 'local';
+  if (local && !config.baseUrl) throw new Error('请填写本地模型服务地址');
   const url = new URL((config.baseUrl || process.env.FOREMAN_BASE_URL || defaultConnection.baseUrl).trim());
   if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) {
     throw new Error('服务地址须为 HTTP(S)，不含查询参数、账号或密码');
+  }
+  if (local && !['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname)) {
+    throw new Error('本地模型仅允许回环地址 localhost、127.0.0.1 或 ::1');
   }
   const protocol = config.protocol || defaultConnection.protocol;
   if (!['rwkv', 'python', 'chat'].includes(protocol)) throw new Error('请选择有效服务协议');
@@ -12,16 +17,16 @@ export function connection(config = {}) {
   url.pathname = path;
   const baseUrl = url.toString().replace(/\/$/, '');
   const headers = { 'Content-Type': 'application/json' };
-  for (const [key, value] of Object.entries(config.headers || {})) {
+  for (const [key, value] of Object.entries(local ? {} : config.headers || {})) {
     if (!/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/.test(key) || /[\r\n]/.test(String(value)) ||
         /^(host|content-length|connection|transfer-encoding)$/i.test(key)) throw new Error('自定义请求头格式无效');
     headers[key] = String(value);
   }
-  const apiKey = config.apiKey || process.env.FOREMAN_PASSWORD ||
+  const apiKey = local ? '' : config.apiKey || process.env.FOREMAN_PASSWORD ||
     (!config.baseUrl && !process.env.FOREMAN_BASE_URL ? defaultConnection.apiKey : '');
   if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
-  const accessId = config.accessId || process.env.FOREMAN_CF_ACCESS_CLIENT_ID;
-  const accessSecret = config.accessSecret || process.env.FOREMAN_CF_ACCESS_CLIENT_SECRET;
+  const accessId = local ? '' : config.accessId || process.env.FOREMAN_CF_ACCESS_CLIENT_ID;
+  const accessSecret = local ? '' : config.accessSecret || process.env.FOREMAN_CF_ACCESS_CLIENT_SECRET;
   if (accessId) headers['CF-Access-Client-Id'] = accessId;
   if (accessSecret) headers['CF-Access-Client-Secret'] = accessSecret;
   return { baseUrl, protocol, headers, apiKey, endpoint: `${baseUrl}/${protocol === 'rwkv' ? 'batch/completions' : 'chat/completions'}` };
@@ -32,6 +37,7 @@ export async function listModels(config, signal) {
   let response;
   try {
     response = await fetch(`${target.baseUrl}/models`, { headers: target.headers,
+      redirect: config.inferenceMode === 'local' ? 'error' : 'follow',
       signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(15000)]) : AbortSignal.timeout(15000) });
   } catch { throw new Error('连接失败或超过 15 秒，请检查地址、网络和代理配置'); }
   if (!response.ok) {

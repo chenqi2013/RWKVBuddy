@@ -103,13 +103,14 @@ export class AgentRun {
     mkdirSync(this.directory, { recursive: true });
     this.send = send;
     this.seq = 0;
-    this.modelPool = new Pool(Math.max(1, Math.min(3, Number(command.config?.concurrency) || 2)));
+    this.modelPool = new Pool(command.config?.inferenceMode === 'local'
+      ? 1 : Math.max(1, Math.min(3, Number(command.config?.concurrency) || 2)));
     this.provider = options.provider || new Provider(command.config || {}, this.modelPool);
     this.state = {
       id: this.id, question: command.question.trim(), workspace: command.workspace || '',
       sourceMode: ['files', 'text'].includes(command.sourceMode) ? command.sourceMode : 'directory', selectedFiles: command.sourceMode === 'files' ? command.selectedFiles : [], attachments: [], warnings: [],
       parentRunId: command.parentRunId || '', conversationId: command.conversationId || this.id,
-      context: command.context || null, answer: '', traces: [], connection: command.mode === 'rwkv' ? { name: command.config?.name || '远端连接', model: command.config?.model || '', protocol: command.config?.protocol || 'rwkv' } : null,
+      context: command.context || null, answer: '', traces: [], connection: command.mode === 'rwkv' ? { name: command.config?.name || '模型服务', model: command.config?.model || '', protocol: command.config?.protocol || 'rwkv', inferenceMode: command.config?.inferenceMode || 'online' } : null,
       mode: command.mode === 'rwkv' ? 'rwkv' : 'local', status: 'running',
       createdAt: new Date().toISOString(), roles: [], tasks: {}, artifacts: [], events: [],
       report: '', reportPath: '', snapshotHash: '', evidence: [], template: '', review: null,
@@ -194,7 +195,7 @@ export class AgentRun {
   async execute() {
     this.event('run.started', { run: { ...this.state, events: [] } });
     try {
-      if (this.state.outputMode === 'files' && this.state.mode === 'local') throw new Error('生成文件需要远端模型，请先启用千问连接');
+      if (this.state.outputMode === 'files' && this.state.mode === 'local') throw new Error('生成文件需要模型，请先启用在线 API 或本地模型连接');
       const requestedPath = promptWorkspace(this.state.question);
       if (requestedPath) {
         const resolved = await this.trace(null, 'read', 'workspace.resolve', { path: requestedPath },

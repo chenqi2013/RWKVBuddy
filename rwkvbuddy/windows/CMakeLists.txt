@@ -115,4 +115,7 @@ install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/../agent-service/"
   DESTINATION "${CMAKE_INSTALL_PREFIX}/agent-service"
   COMPONENT Runtime
   PATTERN "test" EXCLUDE
+  PATTERN ".venv" EXCLUDE
+  PATTERN "__pycache__" EXCLUDE
+  PATTERN "test_server.py" EXCLUDE
   PATTERN ".package-lock.json" EXCLUDE)

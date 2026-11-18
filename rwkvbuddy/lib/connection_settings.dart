@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'agent_controller.dart';
+import 'windows_text_editing.dart';
 
 class ConnectionSettings extends StatefulWidget {
   const ConnectionSettings({super.key, required this.agent});
@@ -18,6 +19,8 @@ class _ConnectionSettingsState extends State<ConnectionSettings> {
   final adapterId = TextEditingController();
   String? editing;
   String protocol = 'chat';
+  String inferenceMode = 'online';
+  String sourceFilter = 'online';
   int concurrency = 2;
   int maxTokens = 4096;
   double temperature = 0.2;
@@ -26,6 +29,12 @@ class _ConnectionSettingsState extends State<ConnectionSettings> {
   bool saving = false;
   Json? result;
   List<String> models = [];
+  @override
+  void initState() {
+    super.initState();
+    sourceFilter = widget.agent.usesLocalModel ? 'local' : 'online';
+  }
+
   @override
   void dispose() {
     for (final controller in [
@@ -46,9 +55,18 @@ class _ConnectionSettingsState extends State<ConnectionSettings> {
     final value = profile ?? <String, dynamic>{};
     setState(() {
       editing = value['id'] as String? ?? '';
-      name.text = value['name'] as String? ?? '';
-      address.text = value['baseUrl'] as String? ?? '';
-      model.text = value['model'] as String? ?? '';
+      inferenceMode = value['inferenceMode'] as String? ?? sourceFilter;
+      if (profile != null && value['inferenceMode'] == null) {
+        inferenceMode = 'online';
+      }
+      final local = inferenceMode == 'local';
+      name.text = value['name'] as String? ?? (local ? '本地 RWKV' : '');
+      address.text =
+          value['baseUrl'] as String? ??
+          (local ? 'http://127.0.0.1:8099/v1' : '');
+      model.text =
+          value['model'] as String? ??
+          (local ? 'rwkv-g1m-1b-temp-6629-ctx65536' : '');
       token.text = value['apiKey'] as String? ?? '';
       final custom = Map<String, dynamic>.from(value['headers'] as Map? ?? {});
       if ((value['accessId'] as String? ?? '').isNotEmpty) {
@@ -62,10 +80,12 @@ class _ConnectionSettingsState extends State<ConnectionSettings> {
           .join('\n');
       stateId.text = value['stateId'] as String? ?? '';
       adapterId.text = value['adapterId'] as String? ?? '';
-      protocol = value['protocol'] as String? ?? 'chat';
+      protocol = value['protocol'] as String? ?? (local ? 'python' : 'chat');
       enableThinking = value['enableThinking'] as bool?;
-      concurrency = (value['concurrency'] as num? ?? 2).toInt().clamp(1, 3);
-      maxTokens = (value['maxTokens'] as num? ?? 4096).toInt();
+      concurrency = (value['concurrency'] as num? ?? (local ? 1 : 2))
+          .toInt()
+          .clamp(1, 3);
+      maxTokens = (value['maxTokens'] as num? ?? (local ? 1024 : 4096)).toInt();
       temperature = (value['temperature'] as num? ?? 0.2).toDouble().clamp(
         0,
         2,
@@ -85,6 +105,10 @@ class _ConnectionSettingsState extends State<ConnectionSettings> {
         url.hasFragment) {
       throw const FormatException('请输入完整的 HTTP(S) 服务地址，凭据请填写到专用字段');
     }
+    if (inferenceMode == 'local' &&
+        !['127.0.0.1', 'localhost', '::1', '[::1]'].contains(url.host)) {
+      throw const FormatException('本地模型地址必须是 localhost、127.0.0.1 或 ::1');
+    }
     final custom = <String, String>{};
     for (final line
         in headers.text.split('\n').where((line) => line.trim().isNotEmpty)) {
@@ -99,14 +123,15 @@ class _ConnectionSettingsState extends State<ConnectionSettings> {
     return {
       if (editing?.isNotEmpty ?? false) 'id': editing,
       'name': name.text.trim().isEmpty ? url.host : name.text.trim(),
+      'inferenceMode': inferenceMode,
       'baseUrl': address.text.trim(),
       'model': model.text.trim(),
       'protocol': protocol,
-      'apiKey': token.text.trim(),
-      'headers': custom,
+      'apiKey': inferenceMode == 'local' ? '' : token.text.trim(),
+      'headers': inferenceMode == 'local' ? <String, String>{} : custom,
       'stateId': stateId.text.trim(),
       'adapterId': adapterId.text.trim(),
-      'concurrency': concurrency,
+      'concurrency': inferenceMode == 'local' ? 1 : concurrency,
       'maxTokens': maxTokens,
       'temperature': temperature,
       if (protocol == 'chat' && enableThinking != null)
@@ -174,7 +199,7 @@ class _ConnectionSettingsState extends State<ConnectionSettings> {
     appBar: AppBar(
       title: Text(
         editing == null
-            ? '远端连接'
+            ? '模型服务'
             : editing!.isEmpty
             ? '新建连接'
             : '编辑连接',
@@ -187,6 +212,9 @@ class _ConnectionSettingsState extends State<ConnectionSettings> {
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 800),
           child: ListView(
+            key: ValueKey(
+              editing == null ? 'list-$sourceFilter' : 'editor-$editing',
+            ),
             padding: const EdgeInsets.all(24),
             children: editing == null ? _list() : _editor(),
           ),
@@ -195,6 +223,31 @@ class _ConnectionSettingsState extends State<ConnectionSettings> {
     ),
   );
   List<Widget> _list() => [
+    SegmentedButton<String>(
+      segments: const [
+        ButtonSegment(
+          value: 'online',
+          label: Text('在线 API'),
+          icon: Icon(Icons.cloud_outlined),
+        ),
+        ButtonSegment(
+          value: 'local',
+          label: Text('本地模型'),
+          icon: Icon(Icons.computer_outlined),
+        ),
+      ],
+      selected: {sourceFilter},
+      onSelectionChanged: (value) =>
+          setState(() => sourceFilter = value.single),
+    ),
+    const SizedBox(height: 20),
+    if (sourceFilter == 'local')
+      const Padding(
+        padding: EdgeInsets.only(bottom: 16),
+        child: Text(
+          '本地模型在此电脑推理，资料仅发送到回环地址。请先启动本地 RWKV 服务（默认端口 8099），再测试生成。该 1B 模型的分析效果仍需验证；本地演示仅运行固定规则。',
+        ),
+      ),
     Row(
       children: [
         const Expanded(
@@ -208,7 +261,9 @@ class _ConnectionSettingsState extends State<ConnectionSettings> {
       ],
     ),
     const SizedBox(height: 24),
-    for (final profile in widget.agent.connections)
+    for (final profile in widget.agent.connections.where(
+      (profile) => (profile['inferenceMode'] ?? 'online') == sourceFilter,
+    ))
       Card(
         margin: const EdgeInsets.only(bottom: 12),
         child: Padding(
@@ -218,7 +273,11 @@ class _ConnectionSettingsState extends State<ConnectionSettings> {
             children: [
               Row(
                 children: [
-                  const Icon(Icons.cloud_outlined),
+                  Icon(
+                    sourceFilter == 'local'
+                        ? Icons.computer_outlined
+                        : Icons.cloud_outlined,
+                  ),
                   const SizedBox(width: 12),
                   Expanded(
                     child: Text(
@@ -305,10 +364,12 @@ class _ConnectionSettingsState extends State<ConnectionSettings> {
           ),
         ),
       ),
-    if (widget.agent.connections.isEmpty)
+    if (!widget.agent.connections.any(
+      (profile) => (profile['inferenceMode'] ?? 'online') == sourceFilter,
+    ))
       const Padding(
         padding: EdgeInsets.symmetric(vertical: 36),
-        child: Text('尚未添加远端连接。支持自托管服务和兼容的远端 API。'),
+        child: Text('尚未添加此类模型服务，点击“新建连接”配置。'),
       ),
     const SizedBox(height: 15),
     const Divider(),
@@ -343,6 +404,37 @@ class _ConnectionSettingsState extends State<ConnectionSettings> {
       label: const Text('连接列表'),
     ),
     const SizedBox(height: 14),
+    DropdownButtonFormField<String>(
+      value: inferenceMode,
+      decoration: const InputDecoration(labelText: '运行模式'),
+      items: const [
+        DropdownMenuItem(value: 'online', child: Text('在线 API')),
+        DropdownMenuItem(value: 'local', child: Text('本地模型')),
+      ],
+      onChanged: testing || saving
+          ? null
+          : (value) => setState(() {
+              inferenceMode = value!;
+              sourceFilter = value;
+              if (value == 'local') {
+                address.text = 'http://127.0.0.1:8099/v1';
+                model.text = 'rwkv-g1m-1b-temp-6629-ctx65536';
+                protocol = 'python';
+                concurrency = 1;
+                maxTokens = 1024;
+                token.clear();
+                headers.clear();
+              }
+              result = null;
+              models = [];
+            }),
+    ),
+    const SizedBox(height: 16),
+    if (inferenceMode == 'local')
+      const Padding(
+        padding: EdgeInsets.only(bottom: 16),
+        child: Text('请先启动本机 RWKV 服务；模型请求串行执行，无需 API Key。'),
+      ),
     _field(name, '连接名称', hint: '例如：公司推理服务'),
     _field(address, '服务地址', hint: 'http://127.0.0.1:8000 或 https://…/v1'),
     DropdownButtonFormField<String>(
@@ -362,23 +454,29 @@ class _ConnectionSettingsState extends State<ConnectionSettings> {
       onChanged: testing ? null : (value) => setState(() => protocol = value!),
     ),
     const SizedBox(height: 16),
-    _field(token, 'API Key / Password', secret: true, hint: '留空使用环境变量'),
-    ExpansionTile(
-      title: const Text('自定义请求头'),
-      subtitle: const Text('Cloudflare Access 或其他网关认证'),
-      children: [
-        TextField(
-          controller: headers,
-          enabled: !testing,
-          minLines: 2,
-          maxLines: 5,
-          decoration: const InputDecoration(
-            hintText: 'CF-Access-Client-Id: …\nCF-Access-Client-Secret: …',
+    if (inferenceMode != 'local')
+      _field(token, 'API Key / Password', secret: true, hint: '留空使用环境变量'),
+    if (inferenceMode != 'local')
+      ExpansionTile(
+        title: const Text('自定义请求头'),
+        subtitle: const Text('Cloudflare Access 或其他网关认证'),
+        children: [
+          WindowsTextEditing(
+            controller: headers,
+            enabled: !testing && !saving,
+            child: TextField(
+              controller: headers,
+              enabled: !testing && !saving,
+              minLines: 2,
+              maxLines: 5,
+              decoration: const InputDecoration(
+                hintText: 'CF-Access-Client-Id: …\nCF-Access-Client-Secret: …',
+              ),
+            ),
           ),
-        ),
-        const SizedBox(height: 16),
-      ],
-    ),
+          const SizedBox(height: 16),
+        ],
+      ),
     const SizedBox(height: 12),
     Wrap(
       spacing: 12,
@@ -439,7 +537,9 @@ class _ConnectionSettingsState extends State<ConnectionSettings> {
           items: [1, 2, 3]
               .map((n) => DropdownMenuItem(value: n, child: Text('$n 个')))
               .toList(),
-          onChanged: (value) => setState(() => concurrency = value!),
+          onChanged: inferenceMode == 'local' || testing || saving
+              ? null
+              : (value) => setState(() => concurrency = value!),
         ),
         const SizedBox(height: 16),
         DropdownButtonFormField<int>(
@@ -487,12 +587,17 @@ class _ConnectionSettingsState extends State<ConnectionSettings> {
     String? hint,
     bool secret = false,
   }) => Padding(
+    key: ObjectKey(controller),
     padding: const EdgeInsets.only(bottom: 16),
-    child: TextField(
+    child: WindowsTextEditing(
       controller: controller,
       enabled: !testing && !saving,
-      obscureText: secret,
-      decoration: InputDecoration(labelText: label, hintText: hint),
+      child: TextField(
+        controller: controller,
+        enabled: !testing && !saving,
+        obscureText: secret,
+        decoration: InputDecoration(labelText: label, hintText: hint),
+      ),
     ),
   );
 }

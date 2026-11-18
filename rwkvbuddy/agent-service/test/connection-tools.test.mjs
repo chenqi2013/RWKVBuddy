@@ -6,6 +6,32 @@ import { Provider } from '../src/provider.mjs';
 import { Pool } from '../src/runtime.mjs';
 import { analysisTool, calculate } from '../src/analysis-tools.mjs';
 
+test('local inference requires an explicit loopback URL and strips online credentials', () => {
+  for (const baseUrl of [undefined, 'https://example.com', 'http://192.168.0.219:8123']) {
+    assert.throws(() => connection({ inferenceMode: 'local', baseUrl }), /本地模型/);
+  }
+  const env = ['FOREMAN_PASSWORD', 'FOREMAN_CF_ACCESS_CLIENT_ID', 'FOREMAN_CF_ACCESS_CLIENT_SECRET'];
+  const previous = env.map((key) => process.env[key]);
+  try {
+    for (const key of env) process.env[key] = 'online-only-secret';
+    for (const host of ['127.0.0.1', 'localhost', '[::1]']) {
+      const target = connection({ inferenceMode: 'local', baseUrl: `http://${host}:8099`,
+        apiKey: 'stale-online-token', headers: { Authorization: 'stale', 'X-Key': 'stale' }, accessId: 'stale' });
+      assert.equal(target.apiKey, '');
+      assert.deepEqual(target.headers, { 'Content-Type': 'application/json' });
+    }
+  } finally {
+    env.forEach((key, index) => { if (previous[index] === undefined) delete process.env[key]; else process.env[key] = previous[index]; });
+  }
+});
+
+test('local model discovery rejects redirects and never contacts a remote fallback', async (t) => {
+  const server = createServer((_req, res) => { res.writeHead(307, { Location: 'https://example.org/v1/models' }); res.end(); });
+  await new Promise((done) => server.listen(0, '127.0.0.1', done));
+  t.after(async () => { server.closeAllConnections(); await new Promise((done) => server.close(done)); });
+  await assert.rejects(listModels({ baseUrl: `http://127.0.0.1:${server.address().port}`, inferenceMode: 'local' }), /连接失败/);
+});
+
 test('connection accepts base, model and completion URLs for each transport', () => {
   for (const suffix of ['', '/', '/v1', '/v1/', '/v1/models', '/v1/chat/completions', '/v1/batch/completions']) {
     for (const protocol of ['rwkv', 'python', 'chat']) {

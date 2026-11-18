@@ -89,5 +89,5 @@ test('missing requested files never yields successful delivery; local mode expla
   assert.match(state.answer, /未生成成果文件/);
   const local = await new AgentRun({ ...command, mode: 'local' }, root, () => {}).execute();
   assert.equal(local.status, 'failed');
-  assert.match(local.error, /需要远端模型/);
+  assert.match(local.error, /需要模型.*在线 API 或本地模型/);
 });

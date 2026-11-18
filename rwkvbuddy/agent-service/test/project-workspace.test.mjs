@@ -7,10 +7,10 @@ import { execFileSync } from 'node:child_process';
 import { indexProject, projectTool, promptWorkspace, resolveProjectPath } from '../src/project-workspace.mjs';
 import { AgentRun } from '../src/engine.mjs';
 
-async function fixture(t) {
+async function fixture(t, trailingSpace = true) {
   const root = await mkdtemp(join(tmpdir(), 'buddy-project-'));
   t.after(() => rm(root, { recursive: true, force: true }));
-  const project = join(root, '工程 ');
+  const project = join(root, trailingSpace ? '工程 ' : '工程');
   await mkdir(join(project, 'src'), { recursive: true });
   await writeFile(join(project, 'README.md'), '# 桌面助手\n支持文件分析\n支持导出\n');
   await writeFile(join(project, 'src/main.dart'), 'void main() {}\n// feature: export');
@@ -49,7 +49,9 @@ test('metadata index contains no bodies; tools paginate paths and expose only ac
 });
 
 test('project tool rejects traversal, secret/ignored files and paths replaced with symlinks', async (t) => {
-  const { root, project } = await fixture(t);
+  // Git for Windows cannot initialize a directory whose name ends in a space.
+  // The other fixtures continue to cover that path-resolution case.
+  const { root, project } = await fixture(t, process.platform !== 'win32');
   execFileSync('git', ['init', '--quiet', project]);
   await writeFile(join(project, '.gitignore'), 'private.txt\n');
   await writeFile(join(project, 'private.txt'), 'hidden');

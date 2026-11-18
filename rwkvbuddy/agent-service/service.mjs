@@ -61,7 +61,8 @@ function processCommand(command) {
             const start = Date.now();
             if (command.generate) {
               const provider = new Provider({ ...command.config, maxTokens: 256 }, new Pool(1));
-              const answer = await provider.generate('连接测试。仅返回 {"ok":true}。', {}, AbortSignal.timeout(20000));
+              const answer = await provider.generate('连接测试。仅返回 {"ok":true}。', {},
+                AbortSignal.timeout(command.config?.inferenceMode === 'local' ? 120000 : 20000));
               if (answer.ok !== true) throw new Error('服务已响应，但生成测试未返回预期的 JSON');
               send({ type: 'connection.result', payload: { requestId: id, ok: true, generation: true,
                 latencyMs: Date.now() - start, summary: '生成测试通过，服务已返回有效回答' } });

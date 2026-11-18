@@ -70,8 +70,11 @@ class AgentController extends ChangeNotifier {
   };
   String get report => run?['report'] as String? ?? '';
   String get answer => run?['answer'] as String? ?? '';
-  String get connectionLabel =>
-      mode == 'local' ? '本地演示' : config['name'] as String? ?? '远端模型';
+  bool get usesLocalModel =>
+      mode == 'rwkv' && config['inferenceMode'] == 'local';
+  String get connectionLabel => mode == 'local'
+      ? '本地演示'
+      : '${usesLocalModel ? '本地模型' : '在线 API'} · ${config['name'] as String? ?? '模型服务'}';
   String get reportPath => run?['reportPath'] as String? ?? '';
   String get runId => run?['id'] as String? ?? '';
   void update() {
@@ -263,7 +266,7 @@ class AgentController extends ChangeNotifier {
   void start(String question) {
     if (busy || question.trim().isEmpty) return;
     if (generateFiles && mode == 'local') {
-      error = '生成文件需要远端模型，请先启用千问连接';
+      error = '生成文件需要模型，请先启用在线 API 或本地模型连接';
       update();
       return;
     }
@@ -401,7 +404,11 @@ class AgentController extends ChangeNotifier {
       'generate': generate,
     });
     try {
-      return await completer.future.timeout(const Duration(seconds: 30));
+      return await completer.future.timeout(
+        Duration(
+          seconds: draft['inferenceMode'] == 'local' && generate ? 150 : 30,
+        ),
+      );
     } catch (_) {
       return {'ok': false, 'summary': '连接测试超时，请检查网络与地址'};
     } finally {

@@ -208,21 +208,26 @@ void main() {
         },
       ];
       await tester.pumpWidget(MyApp(controller: controller));
-      await tester.tap(find.byTooltip('远端连接设置'));
+      await tester.tap(find.byTooltip('模型服务设置'));
       await tester.pumpAndSettle();
       expect(find.text('办公室服务'), findsOneWidget);
       await tester.tap(find.text('使用此连接'));
       await tester.pumpAndSettle();
       expect(controller.mode, 'rwkv');
       expect(controller.config['model'], 'rwkv-test');
-      await tester.tap(find.byTooltip('远端连接设置'));
+      await tester.tap(find.byTooltip('模型服务设置'));
       await tester.pumpAndSettle();
       await tester.tap(find.text('新建连接').last);
       await tester.pumpAndSettle();
       final address = find.widgetWithText(TextField, '服务地址');
       await tester.enterText(address, 'file:///invalid');
       final button = find.text('测试连接 / 获取模型');
-      await tester.ensureVisible(button);
+      await tester.dragUntilVisible(
+        button,
+        find.byType(ListView).last,
+        const Offset(0, -200),
+      );
+      await tester.pumpAndSettle();
       await tester.tap(button);
       await tester.pumpAndSettle();
       expect(find.textContaining('请输入完整的 HTTP(S) 服务地址'), findsOneWidget);

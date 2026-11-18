@@ -551,7 +551,7 @@ class _WorkspacePageState extends State<WorkspacePage>
                 ),
               ),
               IconButton(
-                tooltip: '远端连接',
+                tooltip: '模型服务',
                 onPressed: agent.busy ? null : _settings,
                 icon: const Icon(Icons.settings_outlined, size: 18),
               ),
@@ -590,7 +590,7 @@ class _WorkspacePageState extends State<WorkspacePage>
           else
             const Spacer(),
           IconButton(
-            tooltip: '远端连接设置',
+            tooltip: '模型服务设置',
             onPressed: agent.busy ? null : _settings,
             icon: const Icon(Icons.tune_rounded, size: 19),
           ),
@@ -951,7 +951,7 @@ class _WorkspacePageState extends State<WorkspacePage>
                           mainAxisSize: MainAxisSize.min,
                           children: [
                             Icon(
-                              agent.mode == 'local'
+                              agent.mode == 'local' || agent.usesLocalModel
                                   ? Icons.computer_outlined
                                   : Icons.language_rounded,
                               size: 14,
