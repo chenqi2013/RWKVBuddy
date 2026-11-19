@@ -25,6 +25,7 @@ class _ConnectionSettingsState extends State<ConnectionSettings> {
   int maxTokens = 4096;
   double temperature = 0.2;
   bool? enableThinking;
+  bool? jsonOutput;
   bool testing = false;
   bool saving = false;
   Json? result;
@@ -82,6 +83,7 @@ class _ConnectionSettingsState extends State<ConnectionSettings> {
       protocol = value['protocol'] as String? ?? 'chat';
       enableThinking =
           value['enableThinking'] as bool? ?? (local ? false : null);
+      jsonOutput = value['jsonOutput'] as bool?;
       concurrency = (value['concurrency'] as num? ?? (local ? 1 : 2))
           .toInt()
           .clamp(1, 3);
@@ -136,6 +138,7 @@ class _ConnectionSettingsState extends State<ConnectionSettings> {
       'temperature': temperature,
       if (protocol == 'chat' && enableThinking != null)
         'enableThinking': enableThinking,
+      if (protocol == 'chat' && jsonOutput != null) 'jsonOutput': jsonOutput,
       'autoModel': model.text.trim().isEmpty,
     };
   }
@@ -455,6 +458,15 @@ class _ConnectionSettingsState extends State<ConnectionSettings> {
       onChanged: testing ? null : (value) => setState(() => protocol = value!),
     ),
     const SizedBox(height: 16),
+    if (protocol == 'chat' && inferenceMode != 'local')
+      SwitchListTile(
+        title: const Text('JSON 输出模式'),
+        subtitle: const Text('RWKV 模型默认开启，约束工具调用和结果格式。服务不支持时可关闭。'),
+        value: jsonOutput ?? model.text.trim().toLowerCase().startsWith('rwkv'),
+        onChanged: testing || saving
+            ? null
+            : (value) => setState(() => jsonOutput = value),
+      ),
     if (inferenceMode != 'local')
       _field(token, 'API Key / Password', secret: true, hint: '留空使用环境变量'),
     if (inferenceMode != 'local')
@@ -595,6 +607,7 @@ class _ConnectionSettingsState extends State<ConnectionSettings> {
       enabled: !testing && !saving,
       child: TextField(
         controller: controller,
+        onChanged: controller == model ? (_) => setState(() {}) : null,
         enabled: !testing && !saving,
         obscureText: secret,
         decoration: InputDecoration(labelText: label, hintText: hint),

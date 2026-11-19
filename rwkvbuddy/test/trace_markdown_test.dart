@@ -7,6 +7,35 @@ import 'package:rwkvbuddy/agent_controller.dart';
 import 'package:rwkvbuddy/trace_view.dart';
 
 void main() {
+  testWidgets('format recovery is shown separately from token truncation', (
+    tester,
+  ) async {
+    final agent = AgentController(autoConnect: false);
+    addTearDown(agent.dispose);
+    agent.traces = [
+      {
+        'id': 'json-retry',
+        'kind': 'model',
+        'name': 'test-model',
+        'status': 'completed',
+        'input': {'question': '你是哪一家模型？', 'jsonRecovery': true},
+        'output': '{"answer":"公开回答"}',
+      },
+    ];
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: ListView(
+            children: [TraceView(agent: agent, onExport: () {})],
+          ),
+        ),
+      ),
+    );
+    expect(find.text('返回格式不符合要求，已启用 JSON 输出模式重新请求'), findsOneWidget);
+    expect(find.textContaining('输出超限后重试'), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('file reads render Markdown and retain exact raw text and JSON', (
     tester,
   ) async {

@@ -109,3 +109,45 @@ test('agent explores beyond six calls, recovers errors, saves reads and reuses t
   assert.equal(next.status, 'completed', next.error);
   assert.match(next.answer, /文件分析/);
 });
+
+test('nested tool requests execute real reads and preserve raw responses alongside normalized traces', async (t) => {
+  const { root, project } = await fixture(t);
+  const raw = { progress: '准备读取 README。', tool: { name: 'read_file', arguments: { path: 'README.md', startLine: 1, lineCount: 100 } } };
+  const provider = { generate: async (_instruction, payload) => {
+    if (!payload.toolResults.length) return raw;
+    const read = payload.toolResults[0];
+    assert.equal(read.tool, 'read_file');
+    assert.deepEqual(read.arguments, raw.tool.arguments);
+    assert.match(read.result.text, /支持文件分析/);
+    assert.equal(payload.evidence[0].path, 'README.md');
+    return { answer: '桌面助手支持文件分析和导出。[E1]' };
+  } };
+  const run = new AgentRun({ question: '分析工程功能', workspace: project, mode: 'rwkv' }, join(root, 'runs'), () => {}, { provider });
+  const state = await run.execute();
+  assert.equal(state.status, 'completed', state.error);
+  const read = state.traces.find((trace) => trace.kind === 'tool');
+  assert.equal(read.name, 'read_file');
+  assert.equal(read.status, 'completed');
+  assert.deepEqual(read.input, raw.tool.arguments);
+  assert.equal(read.context.path, 'README.md');
+  assert.match(read.output, /支持文件分析/);
+  assert.deepEqual(JSON.parse(state.traces.find((trace) => trace.kind === 'model').output), raw);
+  const snapshot = JSON.parse(await readFile(join(run.directory, 'inputs.snapshot.json'), 'utf8'));
+  assert.match(snapshot.files['README.md'].content, /支持文件分析/);
+});
+
+test('failed reads cannot result in a completed project analysis after the retry budget', async (t) => {
+  const { root, project } = await fixture(t);
+  let calls = 0;
+  const provider = { generate: async () => ++calls === 1
+    ? { tool: { name: 'read_file', arguments: [] } }
+    : { answer: '已读取 README，工程支持文件分析。' } };
+  const state = await new AgentRun({ question: '分析项目', workspace: project, mode: 'rwkv' }, join(root, 'runs'), () => {}, { provider }).execute();
+  assert.equal(state.status, 'failed');
+  assert.equal(state.answer, '');
+  assert.equal(state.evidence.length, 0);
+  assert.match(state.error, /未成功读取任何文件正文/);
+  const tool = state.traces.find((trace) => trace.kind === 'tool');
+  assert.equal(tool.name, 'read_file');
+  assert.equal(tool.status, 'failed');
+});

@@ -8,6 +8,7 @@ import { readAttachments } from './attachments.mjs';
 import { analysisTool } from './analysis-tools.mjs';
 import { createDeliverables, deliveryInstruction } from './deliverables.mjs';
 import { modelProgress } from './model-progress.mjs';
+import { toolRequest } from './tool-request.mjs';
 import { indexProject, projectOverview, projectTool, promptWorkspace, resolveProjectPath } from './project-workspace.mjs';
 
 function luaVerification(role, facts) {
@@ -106,6 +107,7 @@ export class AgentRun {
     this.modelPool = new Pool(command.config?.inferenceMode === 'local'
       ? 1 : Math.max(1, Math.min(3, Number(command.config?.concurrency) || 2)));
     this.provider = options.provider || new Provider(command.config || {}, this.modelPool);
+    this.forceJsonOutput = false;
     this.state = {
       id: this.id, question: command.question.trim(), workspace: command.workspace || '',
       sourceMode: ['files', 'text'].includes(command.sourceMode) ? command.sourceMode : 'directory', selectedFiles: command.sourceMode === 'files' ? command.selectedFiles : [], attachments: [], warnings: [],
@@ -167,7 +169,7 @@ export class AgentRun {
       this.event('trace.finished', { trace }, roleId);
     }
   }
-  async generate(roleId, instruction, payload, attempt = 0) {
+  async generate(roleId, instruction, payload, attempt = 0, jsonRecovery = false) {
     const recovery = attempt ? '\n上一响应超过输出上限而被截断，尚未提交成功。请重新提交完整且更精简的 JSON，避免重复已知内容。' +
       (attempt === 1 ? '回答控制在 500 字内（不超过 800 字），progress 仅一句。' : '回答控制在 200 字以内，progress 仅一句。') +
       '覆盖关键结论，省略执行过程、完整原始数据和重复说明。' +
@@ -175,7 +177,8 @@ export class AgentRun {
     const maxTokens = attempt ? Math.min(8192, Math.max(4096, (Number(this.command.config?.maxTokens) || 4096) * 2)) : undefined;
     try {
       return await this.trace(roleId, 'model', this.command.config?.model || '远端模型',
-        { instruction: instruction + recovery, ...payload, ...(attempt ? { recoveryAttempt: attempt, maxTokens } : {}) }, async (onDelta) => {
+        { instruction: instruction + recovery, ...payload, ...(attempt ? { recoveryAttempt: attempt, maxTokens } : {}),
+          ...(jsonRecovery ? { jsonRecovery: true } : {}) }, async (onDelta) => {
           let last = 0;
           let phase = '';
           return this.provider.generate(instruction + recovery, payload, this.signal, (length, text, status = {}) => {
@@ -183,13 +186,19 @@ export class AgentRun {
             phase = status.phase;
             last = Date.now();
             onDelta(length, text, status);
-          }, { maxTokens });
+          }, { maxTokens, jsonOutput: this.forceJsonOutput });
         });
     } catch (error) {
+      if (!this.signal.aborted && error.code === 'MODEL_INVALID_JSON' && error.jsonOutput !== true && this.command.config?.protocol === 'chat'
+          && !this.forceJsonOutput && this.command.config?.jsonOutput !== true && this.command.config?.inferenceMode !== 'local') {
+        this.forceJsonOutput = true;
+        this.event('model.recovering', { reason: 'invalid_json', message: '模型返回格式不符合要求，正在启用 JSON 输出模式重新请求；尚未完成交付。' });
+        return this.generate(roleId, instruction, payload, attempt, true);
+      }
       if (this.signal.aborted || attempt >= 2 || error.code !== 'MODEL_OUTPUT_TRUNCATED') throw error;
       this.event('model.recovering', { attempt: attempt + 1, maxTokens: Math.min(8192, Math.max(4096, (Number(this.command.config?.maxTokens) || 4096) * 2)),
         message: '模型输出超限，正在提高输出额度并精简内容后重试；尚未完成交付。' });
-      return this.generate(roleId, instruction, payload, attempt + 1);
+      return this.generate(roleId, instruction, payload, attempt + 1, jsonRecovery);
     }
   }
   async execute() {
@@ -267,6 +276,7 @@ export class AgentRun {
           '用户询问工程用途、功能或技术栈时，优先结合根目录 README、依赖清单、应用入口和实际代码回答；子目录中的测试、fixtures、examples 仅是样例，不能据此将整个工程判定为样例的业务类型。'  +
           '返回 JSON 时首先输出 progress 字符串，用 1–2 句简短中文说明当前处理的资料、操作或可核验的发现，供用户实时查看；不要输出内部思考、推理链、模拟的读取或尚未执行的工具操作。随后输出 answer 或 tool。' +
           '例如 {"progress":"正在根据 README 和依赖清单整理工程用途与技术栈。","answer":"Markdown 格式的中文回答"}；工具请求也先写 progress 再写 tool 和 arguments。' +
+          '工具请求完整格式为 {"progress":"准备读取文件","tool":"read_file","arguments":{"path":"README.md","startLine":1,"lineCount":100}}；tool 是工具名称字符串，arguments 是参数对象，不能返回模拟的 toolResults。' +
           '引用资料时保留 [E1] 等来源标记。回答优先覆盖用户所有问题，默认控制在 1000 字以内，用户要求详细展开时再扩展。\n' + deliveryInstruction +
           (this.state.outputMode === 'files' ? '\n用户已开启生成文件，本轮必须交付至少一个成果文件。' : '') +
           (snapshot.project ? projectInstruction : '\n需要查看原文时返回 {"tool":"read_file","arguments":{"evidenceId":"E1","startLine":1,"lineCount":100}}；' +
@@ -285,21 +295,23 @@ export class AgentRun {
           payload.budget = { remainingToolCalls: toolLimit - step, remainingSeconds: Math.max(0, Math.floor((deadline - Date.now()) / 1000)) };
           result = await this.generate(null, instruction + (step === toolLimit ? '\n工具额度已用尽，必须提交最终结果，并说明未核实部分。' : ''), payload);
           if (!result?.tool) {
-            if (snapshot.project && !facts.evidence.length && payload.project.keyFiles.length && step < toolLimit) {
+            if (snapshot.project && !facts.evidence.length && payload.project.keyFiles.length) {
+              if (step === toolLimit) throw new Error('未成功读取任何文件正文，无法交付项目分析；请检查工具调用记录后重试');
               payload.toolResults.push({ error: '尚未读取任何文件正文，无法核实项目功能。请先调用 read_file 读取关键文件；如无法读取，最终结果须说明原因。' });
               continue;
             }
             break;
           }
           if (step === toolLimit) throw new Error('超过工具调用上限，尚未提交最终结果');
+          const request = toolRequest(result);
           let output;
           try {
-            output = await this.trace(null, 'tool', result.tool, result.arguments ?? {},
-              async () => snapshot.project ? projectTool(result.tool, result.arguments, snapshot, facts.evidence, this.signal)
-                : analysisTool(result.tool, result.arguments, snapshot, facts.evidence),
-              { path: result.arguments?.path || facts.evidence.find((source) => source.id === result.arguments?.evidenceId)?.path || '' });
+            output = await this.trace(null, 'tool', request.name, request.arguments ?? {},
+              async () => snapshot.project ? projectTool(request.name, request.arguments, snapshot, facts.evidence, this.signal)
+                : analysisTool(request.name, request.arguments, snapshot, facts.evidence),
+              { path: request.arguments?.path || facts.evidence.find((source) => source.id === request.arguments?.evidenceId)?.path || '' });
           } catch (error) { if (this.signal.aborted) throw error; output = { error: error.message }; }
-          payload.toolResults.push({ tool: result.tool, arguments: result.arguments, result: output });
+          payload.toolResults.push({ tool: request.name, arguments: request.arguments, result: output });
           if (snapshot.project) {
             snapshot.evidence = facts.evidence;
             this.state.snapshotHash = snapshot.snapshotHash;

@@ -90,6 +90,26 @@ test('failed model request remains failed without replacing its answer with loca
   assert.equal(state.traces.at(-1).status, 'failed');
 });
 
+test('attachment tools decode JSON argument objects and return malformed parameter errors for correction', async (t) => {
+  const root = await scratch(t);
+  const file = join(root, '资料.txt');
+  await writeFile(file, '单价 36 元，数量 12 件');
+  const provider = { generate: async (_instruction, payload) => {
+    const step = payload.toolResults.length;
+    if (!step) return { tool: { name: 'read_file', arguments: JSON.stringify({ evidenceId: payload.evidence[0].id }) } };
+    assert.match(payload.toolResults[0].result.text, /单价 36/);
+    if (step === 1) return { tool: 'calculator', arguments: '[]' };
+    assert.match(payload.toolResults[1].result.error, /参数须为对象/);
+    if (step === 2) return { tool: { name: 'calculator', arguments: '{"expression":"36*12"}' } };
+    assert.equal(payload.toolResults[2].result.result, 432);
+    return { answer: '合计 432 元。[E1]' };
+  } };
+  const state = await new AgentRun({ question: '算合计', sourceMode: 'files', selectedFiles: [file], mode: 'rwkv' }, join(root, 'runs'), () => {}, { provider }).execute();
+  assert.equal(state.status, 'completed', state.error);
+  assert.deepEqual(state.traces.filter((trace) => trace.kind === 'tool').map((trace) => [trace.name, trace.status]),
+    [['read_file', 'completed'], ['calculator', 'failed'], ['calculator', 'completed']]);
+});
+
 test('live public model progress is forwarded and kept in completed history', async (t) => {
   const root = await scratch(t);
   const events = [];
@@ -204,6 +224,87 @@ test('token truncation retries with compact output while preserving the failed r
   const failed = await new AgentRun({ question: '介绍工程', sourceMode: 'text', mode: 'rwkv' }, root, () => {}, { provider: broken }).execute();
   assert.equal(failed.status, 'failed');
   assert.equal(calls, 3);
+});
+
+test('invalid JSON retries once in constrained mode and keeps it for subsequent tools', async (t) => {
+  const root = await scratch(t);
+  let calls = 0;
+  const events = [];
+  const config = { protocol: 'chat', jsonOutput: false, maxTokens: 1024 };
+  const provider = { generate: async (instruction, payload, _signal, delta, options) => {
+    calls++;
+    assert.equal(payload.question, '你是哪一家模型？');
+    assert.equal(options.maxTokens, undefined);
+    if (calls === 1) {
+      assert.equal(options.jsonOutput, false);
+      const text = '<think>private text</think>{"answer":"invalid"}';
+      delta(text.length, text, { phase: 'streaming' });
+      throw Object.assign(new Error('模型未返回有效 JSON'), { code: 'MODEL_INVALID_JSON' });
+    }
+    assert.equal(options.jsonOutput, true);
+    assert.ok(!instruction.includes('private text'));
+    if (calls === 2) return { tool: 'calculator', arguments: { expression: '6*7' } };
+    assert.equal(payload.toolResults[0].result.result, 42);
+    return { answer: '模型的公开回答。' };
+  } };
+  const state = await new AgentRun({ question: '你是哪一家模型？', sourceMode: 'text', mode: 'rwkv', config }, root, (event) => events.push(event), { provider }).execute();
+  assert.equal(state.status, 'completed', state.error);
+  assert.equal(calls, 3);
+  assert.equal(state.answer, '模型的公开回答。');
+  const traces = state.traces.filter((trace) => trace.kind === 'model');
+  assert.deepEqual(traces.map((trace) => trace.status), ['failed', 'completed', 'completed']);
+  assert.equal(traces[0].answerPreview, '');
+  assert.equal(traces[1].input.jsonRecovery, true);
+  assert.equal(events.filter((event) => event.type === 'model.recovering').length, 1);
+  assert.equal(events.find((event) => event.type === 'model.recovering').payload.reason, 'invalid_json');
+  assert.equal(config.jsonOutput, false);
+});
+
+test('format recovery stops after one retry and never publishes invalid file content', async (t) => {
+  const root = await scratch(t);
+  for (const jsonOutput of [false, true]) {
+    let calls = 0;
+    const events = [];
+    const provider = { generate: async () => {
+      calls++;
+      throw Object.assign(new Error('模型未返回有效 JSON'), { code: 'MODEL_INVALID_JSON' });
+    } };
+    const state = await new AgentRun({ question: '生成文件', sourceMode: 'text', mode: 'rwkv', outputMode: 'files',
+      config: { protocol: 'chat', jsonOutput } }, root, (event) => events.push(event), { provider }).execute();
+    assert.equal(state.status, 'failed');
+    assert.equal(calls, jsonOutput ? 1 : 2);
+    assert.deepEqual(state.deliverables, []);
+    assert.equal(events.some((event) => event.type === 'files.created'), false);
+  }
+});
+
+test('format recovery respects cancellation and does not retry transport failures', async (t) => {
+  const root = await scratch(t);
+  for (const cancel of [true, false]) {
+    let calls = 0;
+    let run;
+    const provider = { generate: async () => {
+      calls++;
+      if (cancel) run.cancel();
+      throw Object.assign(new Error('request failed'), { code: cancel ? 'MODEL_INVALID_JSON' : 'NETWORK_ERROR' });
+    } };
+    run = new AgentRun({ question: '你好', sourceMode: 'text', mode: 'rwkv', config: { protocol: 'chat' } }, root, () => {}, { provider });
+    const state = await run.execute();
+    assert.equal(state.status, cancel ? 'cancelled' : 'failed');
+    assert.equal(calls, 1);
+  }
+});
+test('a response already constrained by automatic JSON mode is not retried again', async (t) => {
+  const root = await scratch(t);
+  let calls = 0;
+  const provider = { generate: async () => {
+    calls++;
+    throw Object.assign(new Error('JSON 格式错误'), { code: 'MODEL_INVALID_JSON', jsonOutput: true });
+  } };
+  const state = await new AgentRun({ question: '你是谁？', sourceMode: 'text', mode: 'rwkv',
+    config: { protocol: 'chat', model: 'rwkv7' } }, root, () => {}, { provider }).execute();
+  assert.equal(state.status, 'failed');
+  assert.equal(calls, 1);
 });
 
 test('truncated file delivery increases output allowance and retries compact files without publishing fragments', async (t) => {

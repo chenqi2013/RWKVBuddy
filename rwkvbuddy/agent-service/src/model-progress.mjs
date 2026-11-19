@@ -64,9 +64,10 @@ export function modelProgress(text) {
   if (!source.startsWith('{')) return { progress: '', answerPreview: '', pendingTool: '' };
   const parsed = read();
   const result = parsed?.name === 'submit' ? parsed.arguments?.answer : parsed;
+  const tool = typeof result?.tool === 'string' ? result.tool : result?.tool?.name;
   return {
     progress: typeof result?.progress === 'string' ? result.progress.slice(0, 600) : '',
     answerPreview: typeof result?.answer === 'string' ? result.answer.slice(0, 12000) : '',
-    pendingTool: typeof result?.tool === 'string' ? result.tool.slice(0, 80) : '',
+    pendingTool: typeof tool === 'string' ? tool.slice(0, 80) : '',
   };
 }

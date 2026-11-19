@@ -359,6 +359,9 @@ class _TraceViewState extends State<TraceView> {
     final rows = <Widget>[];
     if (trace['kind'] == 'model') {
       final project = input['project'] is Map;
+      if (input['jsonRecovery'] == true) {
+        rows.add(_note('返回格式不符合要求，已启用 JSON 输出模式重新请求'));
+      }
       if (input['recoveryAttempt'] != null) {
         rows.add(
           _note(

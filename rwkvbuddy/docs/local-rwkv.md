@@ -98,6 +98,14 @@ Windows 和 Intel Mac 的启动参数与架构选择有自动化覆盖，尚未�
 node scripts/evaluate-local-rwkv.mjs --workflow
 ```
 
+局域网部署使用“在线 API”连接类型。可通过同一脚本对比，显式启用 `--api`，不会放宽本机模式的回环地址限制：
+
+```sh
+node scripts/evaluate-local-rwkv.mjs http://192.168.0.115:8104/v1 --api --json-output --workflow
+```
+
+`--json-output` 请求服务提供 JSON 输出约束。界面中的对应选项为“JSON 输出模式”；RWKV Chat 连接默认开启，包括未保存此字段的旧连接，服务不支持时可显式关闭。`rwkv7-g1m-preview-13.3b` 未启用时可能持续输出而在 120 秒后超时。API 验收使用空凭据，不读取其他服务的环境变量密钥；如接口要求鉴权，需要另行接入凭据。脚本只使用合成合同资料，不发送用户的实际文件。
+
 记录写入 `build/model-evaluation/rwkv-<时间戳>/results.json`，包含实际响应、耗时及完整任务目录；任何用例失败会返回非零退出码。仍需使用实际用户文档验证复杂表格、项目分析、多轮修改、引用准确性和长上下文质量。
 
 回归测试：

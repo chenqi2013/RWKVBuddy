@@ -8,6 +8,7 @@ test('public progress and answer are readable before JSON completes, including s
   });
   assert.equal(modelProgress('{"answer":"引号：\\"例子\\"，路径 C:\\\\data"}').answerPreview, '引号："例子"，路径 C:\\data');
   assert.equal(modelProgress('{"progress":"正在检索","tool":"search_text","arguments":').pendingTool, 'search_text');
+  assert.equal(modelProgress('{"progress":"准备读取","tool":{"name":"read_file","arguments":').pendingTool, 'read_file');
 });
 
 test('supports RWKV submit wrapper and fenced responses', () => {

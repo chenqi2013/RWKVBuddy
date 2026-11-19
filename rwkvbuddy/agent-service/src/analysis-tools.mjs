@@ -28,7 +28,7 @@ export function calculate(expression) {
   return { expression, result, note: '普通浮点计算，不替代财务整数核算。' };
 }
 export function analysisTool(name, args, snapshot, evidence) {
-  if (!args || typeof args !== 'object') throw new Error('工具参数须为对象');
+  if (!args || typeof args !== 'object' || Array.isArray(args)) throw new Error('工具参数须为对象');
   if (name === 'calculator') return calculate(args.expression);
   if (name === 'read_file') {
     const source = evidence.find((item) => item.id === args.evidenceId);

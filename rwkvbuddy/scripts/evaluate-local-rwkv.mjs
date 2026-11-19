@@ -8,15 +8,23 @@ import { AgentRun } from '../agent-service/src/engine.mjs';
 
 const args = process.argv.slice(2);
 if (args.includes('--help')) {
-  console.log('Usage: node scripts/evaluate-local-rwkv.mjs [http://127.0.0.1:8099/v1] [--workflow]');
+  console.log('Usage: node scripts/evaluate-local-rwkv.mjs [http://127.0.0.1:8099/v1] [--workflow] [--api] [--json-output]');
+  console.log('--api: evaluate an explicitly supplied LAN/API URL using the online connection transport');
   process.exit(0);
 }
-if (args.some((arg) => arg.startsWith('--') && arg !== '--workflow')) throw new Error('Unknown option');
+if (args.some((arg) => arg.startsWith('--') && !['--workflow', '--api', '--json-output'].includes(arg))) throw new Error('Unknown option');
+const api = args.includes('--api');
+const address = args.find((arg) => !arg.startsWith('--'));
+if (api && !address) throw new Error('--api requires an explicit service URL');
+if (api) {
+  for (const key of ['FOREMAN_PASSWORD', 'FOREMAN_MODEL', 'FOREMAN_CF_ACCESS_CLIENT_ID', 'FOREMAN_CF_ACCESS_CLIENT_SECRET']) delete process.env[key];
+}
 const evaluationRoot = resolve('build/model-evaluation', `rwkv-${Date.now()}`);
 
 const config = {
-  baseUrl: args.find((arg) => !arg.startsWith('--')) || 'http://127.0.0.1:8099/v1',
-  inferenceMode: 'local', protocol: 'chat', model: '', concurrency: 1, enableThinking: false,
+  baseUrl: address || 'http://127.0.0.1:8099/v1',
+  inferenceMode: api ? 'online' : 'local', protocol: 'chat', model: '', concurrency: 1, enableThinking: false,
+  jsonOutput: args.includes('--json-output'),
   maxTokens: 512, temperature: 0,
 };
 const models = await listModels(config);
@@ -76,6 +84,8 @@ if (args.includes('--workflow')) {
 }
 const file = join(evaluationRoot, 'results.json');
 writeFileSync(file, JSON.stringify({ model: config.model, timestamp: new Date().toISOString(),
+  baseUrl: config.baseUrl, inferenceMode: config.inferenceMode, maxTokens: config.maxTokens, temperature: config.temperature,
+  jsonOutput: config.inferenceMode === 'local' || config.jsonOutput,
   scope: 'Contract probes only; not proof of document analysis quality or long-context recall', results }, null, 2));
 console.log(`Passed ${results.filter((r) => r.passed).length}/${results.length}; evidence: ${file}`);
 if (results.some((r) => !r.passed)) process.exitCode = 1;

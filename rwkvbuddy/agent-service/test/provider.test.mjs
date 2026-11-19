@@ -41,7 +41,8 @@ test('chat protocol uses independent messages and rejects non-JSON model output'
     response.end(JSON.stringify({ choices: [{ message: { content: 'unstructured answer' } }] }));
   });
   const provider = new Provider({ baseUrl, protocol: 'chat', model: 'test-model' }, new Pool(1));
-  await assert.rejects(provider.generate('分析', {}, new AbortController().signal), /有效 JSON/);
+  await assert.rejects(provider.generate('分析', {}, new AbortController().signal),
+    (error) => error.code === 'MODEL_INVALID_JSON' && /有效 JSON/.test(error.message));
   assert.equal(path, '/v1/chat/completions');
   assert.equal(input.messages.length, 2);
   assert.ok(!input.contents);
@@ -65,6 +66,114 @@ test('local GGUF chat requests constrained JSON and disables thinking without le
   assert.equal(input.messages.length, 2);
   assert.equal(input.contents, undefined);
   assert.ok(output.every((text) => !text.includes('private reasoning')));
+});
+test('API JSON output is opt-in and preserves the configured API transport', async (t) => {
+  const inputs = [];
+  const baseUrl = await server(t, async (request, response) => {
+    inputs.push(await body(request));
+    response.writeHead(200, { 'Content-Type': 'application/json' });
+    response.end(JSON.stringify({ choices: [{ message: { content: '{"answer":"432"}' }, finish_reason: 'stop' }] }));
+  });
+  for (const jsonOutput of [false, true]) {
+    const result = await new Provider({ baseUrl, inferenceMode: 'online', protocol: 'chat',
+      model: 'test-model', jsonOutput, enableThinking: false }, new Pool(1))
+      .generate('测试', {}, new AbortController().signal);
+    assert.equal(result.answer, '432');
+  }
+  assert.equal(inputs[0].response_format, undefined);
+  assert.deepEqual(inputs[1].response_format, { type: 'json_object' });
+  assert.equal(inputs[1].messages.length, 2);
+  assert.equal(inputs[1].chat_template_kwargs.enable_thinking, false);
+  assert.match(inputs[1].messages[0].content, /当前实际调用的模型 ID："test-model"/);
+  assert.match(inputs[1].messages[0].content, /不自称其他模型或猜测厂商/);
+});
+test('RWKV chat defaults to JSON for existing profiles and discovered models but respects explicit opt-out', async (t) => {
+  const inputs = [];
+  const baseUrl = await server(t, async (request, response) => {
+    response.writeHead(200, { 'Content-Type': 'application/json' });
+    if (request.url.endsWith('/models')) {
+      response.end(JSON.stringify({ data: [{ id: 'rwkv7-g1m-preview-13.3b' }] }));
+      return;
+    }
+    inputs.push(await body(request));
+    response.end(JSON.stringify({ choices: [{ message: { content: '{"answer":"我是 RWKV"}' }, finish_reason: 'stop' }] }));
+  });
+  for (const item of [
+    { model: 'rwkv7-g1m-preview-13.3b' },
+    { model: 'RWKV-7' },
+    { model: '' },
+    { model: 'rwkv7-g1m-preview-13.3b', jsonOutput: false },
+    { model: 'qwen' },
+  ]) {
+    const config = { baseUrl, protocol: 'chat', inferenceMode: 'online', ...item };
+    const provider = new Provider(config, new Pool(1));
+    await provider.generate('你是谁？', {}, new AbortController().signal, () => {}, { jsonOutput: false });
+    const expected = item.jsonOutput !== false && item.model !== 'qwen';
+    assert.deepEqual(inputs.at(-1).response_format, expected ? { type: 'json_object' } : undefined);
+    assert.equal(config.jsonOutput, item.jsonOutput);
+  }
+});
+test('request timeouts before headers and during a live stream have the same actionable error', async (t) => {
+  const originalTimeout = AbortSignal.timeout.bind(AbortSignal);
+  t.mock.method(AbortSignal, 'timeout', () => originalTimeout(80));
+  let streaming = false;
+  let ticks = 0;
+  const baseUrl = await server(t, async (request, response) => {
+    await body(request);
+    if (!streaming) return;
+    response.writeHead(200, { 'Content-Type': 'text/event-stream' });
+    response.write(': waiting\n\n');
+    const timer = setInterval(() => { ticks++; response.write(': waiting\n\n'); }, 5);
+    response.once('close', () => clearInterval(timer));
+  });
+  const pool = new Pool(1);
+  const provider = new Provider({ baseUrl, protocol: 'chat', model: 'test-model' }, pool);
+  for (const phase of [false, true]) {
+    streaming = phase;
+    await assert.rejects(provider.generate('你是谁？', {}, new AbortController().signal),
+      (error) => error.code === 'MODEL_TIMEOUT' && /120 秒/.test(error.message) && /JSON 输出模式/.test(error.message));
+    assert.equal(pool.active, 0);
+  }
+  assert.ok(ticks > 0);
+});
+test('format recovery requests constrained JSON without changing saved connection settings', async (t) => {
+  const inputs = [];
+  const baseUrl = await server(t, async (request, response) => {
+    const input = await body(request);
+    inputs.push(input);
+    response.writeHead(200, { 'Content-Type': 'application/json' });
+    response.end(JSON.stringify({ choices: [{ message: { content: input.response_format
+      ? '{"answer":"公开回答"}' : '<think>private text</think>{"answer":"不应提交"}' }, finish_reason: 'stop' }] }));
+  });
+  const config = { baseUrl, inferenceMode: 'online', protocol: 'chat', model: 'test-model', jsonOutput: false };
+  const provider = new Provider(config, new Pool(1));
+  await assert.rejects(provider.generate('你是哪一家模型？', {}, new AbortController().signal), { code: 'MODEL_INVALID_JSON' });
+  const result = await provider.generate('你是哪一家模型？', {}, new AbortController().signal, () => {}, { jsonOutput: true });
+  assert.equal(result.answer, '公开回答');
+  assert.equal(inputs[0].response_format, undefined);
+  assert.deepEqual(inputs[1].response_format, { type: 'json_object' });
+  assert.equal(config.jsonOutput, false);
+});
+test('null, primitive and incomplete submit responses have classified format errors', async (t) => {
+  const responses = ['null', '[]', 'true', '"plain answer"', '{"name":"submit"}'];
+  const baseUrl = await server(t, async (request, response) => {
+    await body(request);
+    response.writeHead(200, { 'Content-Type': 'application/json' });
+    response.end(JSON.stringify({ choices: [{ message: { content: responses.shift() }, finish_reason: 'stop' }] }));
+  });
+  const provider = new Provider({ baseUrl, protocol: 'chat', model: 'test-model' }, new Pool(1));
+  for (let count = 0; count < 5; count++) {
+    await assert.rejects(provider.generate('测试', {}, new AbortController().signal), { code: 'MODEL_INVALID_JSON' });
+  }
+});
+test('unsupported JSON mode reports a configuration error without retrying as plain text', async (t) => {
+  const baseUrl = await server(t, async (request, response) => {
+    await body(request);
+    response.writeHead(400);
+    response.end('unsupported response_format');
+  });
+  const provider = new Provider({ baseUrl, protocol: 'chat', model: 'test-model' }, new Pool(1));
+  await assert.rejects(provider.generate('测试', {}, new AbortController().signal, () => {}, { jsonOutput: true }), /JSON 输出模式/);
 });
 test('cancelling an active HTTP stream rejects and releases model slot', async (t) => {
   let ready;
