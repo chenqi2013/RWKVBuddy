@@ -65,8 +65,7 @@ class _ConnectionSettingsState extends State<ConnectionSettings> {
           value['baseUrl'] as String? ??
           (local ? 'http://127.0.0.1:8099/v1' : '');
       model.text =
-          value['model'] as String? ??
-          (local ? 'rwkv-g1m-1b-temp-6629-ctx65536' : '');
+          value['model'] as String? ?? (local ? 'rwkv7-g1l-1.5b-Q4_K_M' : '');
       token.text = value['apiKey'] as String? ?? '';
       final custom = Map<String, dynamic>.from(value['headers'] as Map? ?? {});
       if ((value['accessId'] as String? ?? '').isNotEmpty) {
@@ -80,8 +79,9 @@ class _ConnectionSettingsState extends State<ConnectionSettings> {
           .join('\n');
       stateId.text = value['stateId'] as String? ?? '';
       adapterId.text = value['adapterId'] as String? ?? '';
-      protocol = value['protocol'] as String? ?? (local ? 'python' : 'chat');
-      enableThinking = value['enableThinking'] as bool?;
+      protocol = value['protocol'] as String? ?? 'chat';
+      enableThinking =
+          value['enableThinking'] as bool? ?? (local ? false : null);
       concurrency = (value['concurrency'] as num? ?? (local ? 1 : 2))
           .toInt()
           .clamp(1, 3);
@@ -245,7 +245,7 @@ class _ConnectionSettingsState extends State<ConnectionSettings> {
       const Padding(
         padding: EdgeInsets.only(bottom: 16),
         child: Text(
-          '本地模型在此电脑推理，资料仅发送到回环地址。请先启动本地 RWKV 服务（默认端口 8099），再测试生成。该 1B 模型的分析效果仍需验证；本地演示仅运行固定规则。',
+          '本地模型在此电脑推理，资料仅发送到回环地址。支持 Windows 和 macOS，使用 llama.cpp 加载 RWKV-7 GGUF（默认端口 8099）。请先启动服务再测试生成；本地演示仅运行固定规则。',
         ),
       ),
     Row(
@@ -418,8 +418,9 @@ class _ConnectionSettingsState extends State<ConnectionSettings> {
               sourceFilter = value;
               if (value == 'local') {
                 address.text = 'http://127.0.0.1:8099/v1';
-                model.text = 'rwkv-g1m-1b-temp-6629-ctx65536';
-                protocol = 'python';
+                model.text = 'rwkv7-g1l-1.5b-Q4_K_M';
+                protocol = 'chat';
+                enableThinking = false;
                 concurrency = 1;
                 maxTokens = 1024;
                 token.clear();
@@ -433,7 +434,7 @@ class _ConnectionSettingsState extends State<ConnectionSettings> {
     if (inferenceMode == 'local')
       const Padding(
         padding: EdgeInsets.only(bottom: 16),
-        child: Text('请先启动本机 RWKV 服务；模型请求串行执行，无需 API Key。'),
+        child: Text('请先启动本机 GGUF 服务；使用 Chat Completions，模型请求串行执行，无需 API Key。'),
       ),
     _field(name, '连接名称', hint: '例如：公司推理服务'),
     _field(address, '服务地址', hint: 'http://127.0.0.1:8000 或 https://…/v1'),

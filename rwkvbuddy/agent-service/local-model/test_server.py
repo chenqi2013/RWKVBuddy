@@ -1,101 +1,71 @@
-"""HTTP/stream/cancellation regression tests; deliberately do not evaluate weights."""
+"""GGUF launcher contract tests; real inference is tested separately."""
 
-import http.client
-import json
-import threading
+from pathlib import Path
+import tempfile
 import unittest
 
-from server import LocalServer, MODEL_ID, prompt_from_request
+from server import parser, runtime_name, server_command
 
 
-class Backend:
-    def prepare(self, prompt, max_tokens):
-        if 'oversized' in prompt:
-            raise ValueError('Input exceeds local context budget; nothing was truncated')
-        return prompt
-
-    def generate(self, prompt, max_tokens, temperature, cancelled):
-        yield '{"answer":"'
-        yield '中文'
-        yield '"}'
-        if 'truncate' in prompt:
-            yield None
-
-
-class ServerTests(unittest.TestCase):
+class LauncherTests(unittest.TestCase):
     def setUp(self):
-        self.backend = Backend()
-        self.server = LocalServer(('127.0.0.1', 0), self.backend)
-        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
-        self.thread.start()
-        self.port = self.server.server_port
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        self.model = self.root / '中文 模型.gguf'
+        self.model.write_bytes(b'GGUF' + bytes(32))
+        self.binary = self.root / 'llama-server'
+        self.binary.touch()
 
-    def tearDown(self):
-        self.server.shutdown()
-        self.server.server_close()
-        self.thread.join(2)
+    def arguments(self, *extra):
+        return parser().parse_args(['--model', str(self.model), '--server', str(self.binary), *extra])
 
-    def request(self, path, data=None, headers=None):
-        connection = http.client.HTTPConnection('127.0.0.1', self.port, timeout=5)
-        self.addCleanup(connection.close)
-        connection.request('GET' if data is None else 'POST', path,
-                           body=None if data is None else json.dumps(data).encode(), headers=headers or {})
-        response = connection.getresponse()
-        return response.status, response.read().decode()
+    def test_platform_and_architecture_matrix(self):
+        for system, machine, expected in [
+            ('Darwin', 'arm64', 'macos-arm64'), ('Darwin', 'x86_64', 'macos-x64'),
+            ('Windows', 'AMD64', 'windows-x64'), ('Windows', 'ARM64', 'windows-arm64'),
+        ]:
+            self.assertEqual(runtime_name(system, machine), expected)
+        for system, machine in [('Linux', 'x86_64'), ('Windows', 'x86')]:
+            with self.assertRaises(ValueError):
+                runtime_name(system, machine)
 
-    def test_official_template_and_raw_prompt(self):
-        self.assertEqual(prompt_from_request({'messages': [
-            {'role': 'system', 'content': '工具'}, {'role': 'user', 'content': '你好'}]}),
-            'System: 工具\n\nUser: 你好\n\nAssistant:')
-        self.assertEqual(prompt_from_request({'contents': ['System: Tools:\n\nAssistant: ```json\n']}),
-                         'System: Tools:\n\nAssistant: ```json\n')
+    def test_native_commands_use_metadata_template_and_loopback(self):
+        for system, machine, layers in [('Darwin', 'arm64', '-1'), ('Windows', 'AMD64', '0')]:
+            command = server_command(self.arguments(), system, machine)
+            self.assertEqual(command[command.index('--model') + 1], str(self.model.resolve()))
+            self.assertEqual(command[command.index('--alias') + 1], self.model.stem)
+            self.assertEqual(command[command.index('--host') + 1], '127.0.0.1')
+            self.assertEqual(command[command.index('--parallel') + 1], '1')
+            self.assertEqual(command[command.index('--n-gpu-layers') + 1], layers)
+            for flag in ('--jinja', '--no-context-shift', '--no-cache-prompt', '--offline', '--no-webui'):
+                self.assertIn(flag, command)
+            self.assertNotIn('--chat-template', command)
+            self.assertEqual(command[command.index('--reasoning') + 1], 'off')
 
-    def test_discovery_and_nonstream_generation(self):
-        status, text = self.request('/v1/models')
-        self.assertEqual(status, 200)
-        self.assertEqual(json.loads(text)['data'][0]['id'], MODEL_ID)
-        status, text = self.request('/v1/chat/completions', {'contents': ['test']})
-        self.assertEqual(status, 200)
-        self.assertEqual(json.loads(text)['choices'][0]['message']['content'], '{"answer":"中文"}')
+    def test_cpu_override_and_limits(self):
+        command = server_command(self.arguments('--gpu-layers', '0', '--context-limit', '16384'), 'Darwin', 'arm64')
+        self.assertEqual(command[command.index('--n-gpu-layers') + 1], '0')
+        self.assertEqual(command[command.index('--ctx-size') + 1], '16384')
+        for extra in [('--port', '0'), ('--threads', '0'), ('--context-limit', '0'), ('--gpu-layers', '-2')]:
+            with self.assertRaises(ValueError):
+                server_command(self.arguments(*extra), 'Windows', 'AMD64')
 
-    def test_stream_and_truncation(self):
-        status, text = self.request('/v1/chat/completions', {'contents': ['truncate'], 'stream': True})
-        self.assertEqual(status, 200)
-        events = [json.loads(line[6:]) for line in text.splitlines() if line.startswith('data: {')]
-        self.assertEqual(events[-1]['choices'][0]['finish_reason'], 'length')
-        self.assertTrue(text.endswith('data: [DONE]\n\n'))
-
-    def test_invalid_inputs_and_context_are_rejected(self):
-        for body in [{'contents': []}, {'contents': ['a', 'b']}, {'contents': ['a'], 'model': 'wrong'},
-                     {'contents': ['oversized']}, {'contents': ['a'], 'max_tokens': -1},
-                     {'contents': ['a'], 'temperature': float('nan')}, {'messages': [{'role': 'user', 'content': []}]}]:
-            status, _ = self.request('/v1/chat/completions', body)
-            self.assertEqual(status, 400, body)
-        status, _ = self.request('/v1/chat/completions', {'contents': ['a']}, {'Origin': 'https://example.org'})
-        self.assertEqual(status, 403)
-
-    def test_cancellation_keeps_slot_until_model_stops(self):
-        entered, cancelled_seen = threading.Event(), threading.Event()
-
-        def generate(prompt, max_tokens, temperature, cancelled):
-            entered.set()
-            cancelled.wait(5)
-            if cancelled.is_set():
-                cancelled_seen.set()
-            yield 'late'
-
-        self.backend.generate = generate
-        client = http.client.HTTPConnection('127.0.0.1', self.port, timeout=5)
-        client.request('POST', '/v1/chat/completions', body=json.dumps({'contents': ['a'], 'stream': True}))
-        response = client.getresponse()
-        self.assertTrue(entered.wait(2))
-        status, _ = self.request('/v1/chat/completions', {'contents': ['b']})
-        self.assertEqual(status, 429)
-        response.close()
-        client.close()
-        self.assertTrue(cancelled_seen.wait(4))
-        self.assertTrue(self.server.inference_lock.acquire(timeout=2))
-        self.server.inference_lock.release()
+    def test_rejects_pth_corrupt_or_missing_weights_and_missing_runtime(self):
+        weights = self.root / 'old.pth'
+        weights.touch()
+        with self.assertRaisesRegex(ValueError, 'gguf'):
+            server_command(self.arguments('--model', str(weights)), 'Darwin', 'arm64')
+        self.model.write_bytes(b'junk')
+        with self.assertRaisesRegex(ValueError, 'header'):
+            server_command(self.arguments(), 'Darwin', 'arm64')
+        self.model.unlink()
+        with self.assertRaises(ValueError):
+            server_command(self.arguments(), 'Darwin', 'arm64')
+        self.model.write_bytes(b'GGUF')
+        self.binary.unlink()
+        with self.assertRaisesRegex(ValueError, 'prepare-local-rwkv'):
+            server_command(self.arguments(), 'Darwin', 'arm64')
 
 
 if __name__ == '__main__':

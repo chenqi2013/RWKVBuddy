@@ -16,7 +16,7 @@ const evaluationRoot = resolve('build/model-evaluation', `rwkv-${Date.now()}`);
 
 const config = {
   baseUrl: args.find((arg) => !arg.startsWith('--')) || 'http://127.0.0.1:8099/v1',
-  inferenceMode: 'local', protocol: 'python', model: '', concurrency: 1,
+  inferenceMode: 'local', protocol: 'chat', model: '', concurrency: 1, enableThinking: false,
   maxTokens: 512, temperature: 0,
 };
 const models = await listModels(config);

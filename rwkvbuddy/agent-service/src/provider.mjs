@@ -31,6 +31,7 @@ export class Provider {
       const body = mode === 'chat' ? {
         model, stream: true, ...generation,
         messages: [{ role: 'system', content: system }, { role: 'user', content: user }],
+        ...(config.inferenceMode === 'local' ? { response_format: { type: 'json_object' } } : {}),
         ...(config.enableThinking === false ? { chat_template_kwargs: { enable_thinking: false }, enable_thinking: false } : {}),
       } : {
         model, password, contents: [prompt],
@@ -58,7 +59,7 @@ export class Provider {
         if (config.inferenceMode === 'local') {
           throw new Error(response.status === 429
             ? '本地模型正在处理请求，请等待或停止其他任务后重试。'
-            : `本地模型 HTTP ${response.status}：请检查模型名称、请求参数及输入加输出 Token 是否超过服务的 --context-limit。`);
+            : `本地模型 HTTP ${response.status}：请检查模型名称、请求参数及输入加输出 Token 是否超过服务的 --context-limit（llama.cpp 的 --ctx-size）。`);
         }
         throw new Error(`模型服务 HTTP ${response.status}，请检查服务协议、模型和凭据。`);
       }

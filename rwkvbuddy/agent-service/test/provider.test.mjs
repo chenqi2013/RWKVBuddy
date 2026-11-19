@@ -45,6 +45,26 @@ test('chat protocol uses independent messages and rejects non-JSON model output'
   assert.equal(path, '/v1/chat/completions');
   assert.equal(input.messages.length, 2);
   assert.ok(!input.contents);
+  assert.equal(input.response_format, undefined);
+});
+test('local GGUF chat requests constrained JSON and disables thinking without legacy raw prompts', async (t) => {
+  let input;
+  const baseUrl = await server(t, async (request, response) => {
+    input = await body(request);
+    response.writeHead(200, { 'Content-Type': 'text/event-stream' });
+    response.write(`data: ${JSON.stringify({ choices: [{ delta: { reasoning_content: 'private reasoning' } }] })}\n\n`);
+    response.end(`data: ${JSON.stringify({ choices: [{ delta: { content: '{"ok":true}' }, finish_reason: 'stop' }] })}\n\ndata: [DONE]\n\n`);
+  });
+  const provider = new Provider({ baseUrl, inferenceMode: 'local', protocol: 'chat',
+    model: 'rwkv7-g1l-1.5b-Q4_K_M', enableThinking: false }, new Pool(1));
+  const output = [];
+  const result = await provider.generate('测试', {}, new AbortController().signal, (_length, text) => output.push(text));
+  assert.equal(result.ok, true);
+  assert.deepEqual(input.response_format, { type: 'json_object' });
+  assert.equal(input.chat_template_kwargs.enable_thinking, false);
+  assert.equal(input.messages.length, 2);
+  assert.equal(input.contents, undefined);
+  assert.ok(output.every((text) => !text.includes('private reasoning')));
 });
 test('cancelling an active HTTP stream rejects and releases model slot', async (t) => {
   let ready;

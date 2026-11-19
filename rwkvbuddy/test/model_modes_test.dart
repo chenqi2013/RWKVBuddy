@@ -63,7 +63,9 @@ void main() {
       await tester.pumpAndSettle();
       expect(agent.usesLocalModel, isTrue);
       expect(agent.config['inferenceMode'], 'local');
-      expect(agent.config['protocol'], 'python');
+      expect(agent.config['protocol'], 'chat');
+      expect(agent.config['model'], 'rwkv7-g1l-1.5b-Q4_K_M');
+      expect(agent.config['enableThinking'], isFalse);
       expect(agent.config['concurrency'], 1);
       expect(agent.config['maxTokens'], 1024);
       expect(agent.connectionLabel, contains('本地模型'));
