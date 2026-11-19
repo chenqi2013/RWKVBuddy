@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile, mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { createInterface } from 'node:readline';
@@ -69,6 +69,82 @@ test('JSONL service works with Unicode paths, persists history across restart, e
   assert.equal(error.payload.message, '无效任务 ID');
   service.send({ type: 'shutdown' });
   await new Promise((done) => service.child.once('exit', done));
+});
+
+test('history pins persist across restarts; deletion removes task data and keeps original files', { timeout: 20000 }, async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'rwkvbuddy-history-'));
+  const data = join(root, 'runs');
+  const original = join(root, '原始资料.txt');
+  await writeFile(original, '保留原件');
+  const older = '11111111-1111-4111-8111-111111111111';
+  const newer = '22222222-2222-4222-8222-222222222222';
+  for (const [id, createdAt] of [[older, '2026-11-18T01:00:00Z'], [newer, '2026-11-19T01:00:00Z']]) {
+    await mkdir(join(data, id, 'outputs'), { recursive: true });
+    await writeFile(join(data, id, 'outputs', '成果.txt'), '生成内容');
+    await writeFile(join(data, id, 'run.json'), JSON.stringify({ id, question: id, createdAt, status: 'completed', selectedFiles: [original] }));
+  }
+  let service = launch(data);
+  t.after(async () => { service.child.kill(); await rm(root, { recursive: true, force: true }); });
+  assert.deepEqual((await service.wait('service.ready')).payload.runs.map(run => run.id), [newer, older]);
+  let marker = service.events.length;
+  service.send({ type: 'run.pin', runId: older, pinned: true });
+  let history = (await service.wait('history', marker)).payload.runs;
+  assert.deepEqual(history.map(run => run.id), [older, newer]);
+  assert.equal(history[0].pinned, true);
+  service.send({ type: 'shutdown' });
+  await new Promise(done => service.child.once('exit', done));
+  service = launch(data);
+  history = (await service.wait('service.ready')).payload.runs;
+  assert.equal(history[0].id, older);
+  assert.equal(history[0].pinned, true);
+  marker = service.events.length;
+  service.send({ type: 'run.pin', runId: older, pinned: false });
+  history = (await service.wait('history', marker)).payload.runs;
+  assert.deepEqual(history.map(run => run.id), [newer, older]);
+  assert.equal(history[1].pinned, false);
+  marker = service.events.length;
+  service.send({ type: 'run.delete', runId: '../outside' });
+  assert.match((await service.wait('service.error', marker)).payload.message, /无效任务 ID/);
+  marker = service.events.length;
+  service.send({ type: 'run.delete', runId: older });
+  assert.equal((await service.wait('run.deleted', marker)).payload.runId, older);
+  assert.deepEqual((await service.wait('history', marker)).payload.runs.map(run => run.id), [newer]);
+  await assert.rejects(readFile(join(data, older, 'outputs', '成果.txt')), { code: 'ENOENT' });
+  assert.equal(await readFile(original, 'utf8'), '保留原件');
+  assert.equal(JSON.parse(await readFile(join(data, newer, 'run.json'), 'utf8')).id, newer);
+  service.send({ type: 'shutdown' });
+  await new Promise(done => service.child.once('exit', done));
+  service = launch(data);
+  assert.deepEqual((await service.wait('service.ready')).payload.runs.map(run => run.id), [newer]);
+  service.send({ type: 'shutdown' });
+  await new Promise(done => service.child.once('exit', done));
+});
+
+test('an active task cannot be deleted or lose its persisted traces', { timeout: 20000 }, async (t) => {
+  const server = createServer(async (request, response) => {
+    for await (const chunk of request) {}
+    response.writeHead(200, { 'Content-Type': 'text/event-stream' });
+    response.write(': waiting\n\n');
+  });
+  await new Promise(done => server.listen(0, '127.0.0.1', done));
+  const root = await mkdtemp(join(tmpdir(), 'rwkvbuddy-history-'));
+  const service = launch(root);
+  t.after(async () => {
+    service.child.kill();
+    server.closeAllConnections();
+    await new Promise(done => server.close(done));
+    await rm(root, { recursive: true, force: true });
+  });
+  await service.wait('service.ready');
+  service.send({ type: 'run', question: '等待响应', mode: 'rwkv', sourceMode: 'text',
+    config: { protocol: 'chat', model: 'test', baseUrl: `http://127.0.0.1:${server.address().port}/v1` } });
+  const started = await service.wait('run.started');
+  const marker = service.events.length;
+  service.send({ type: 'run.delete', runId: started.runId });
+  assert.match((await service.wait('service.error', marker)).payload.message, /先停止/);
+  assert.equal(JSON.parse(await readFile(join(root, started.runId, 'run.json'), 'utf8')).id, started.runId);
+  service.send({ type: 'shutdown' });
+  await new Promise(done => service.child.once('exit', done));
 });
 
 test('follow-up reuses persisted files after original deletion; history and exported traces replay the conversation', { timeout: 20000 }, async (t) => {

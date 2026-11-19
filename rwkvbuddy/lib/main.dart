@@ -140,6 +140,8 @@ class _WorkspacePageState extends State<WorkspacePage>
   Duration _lastFollowTick = Duration.zero;
   bool _exiting = false;
   bool _sidebarOpen = true;
+  String? _hoveredHistoryId;
+  String? _historyMenuId;
   int _category = 0;
   final promptFocus = FocusNode();
   @override
@@ -454,44 +456,75 @@ class _WorkspacePageState extends State<WorkspacePage>
                   itemCount: agent.history.length,
                   itemBuilder: (_, index) {
                     final item = agent.history[index];
+                    final id = item['id'] as String;
                     return Padding(
+                      key: ValueKey('history-item-$id'),
                       padding: const EdgeInsets.only(bottom: 4),
-                      child: Material(
-                        color: item['id'] == agent.runId
-                            ? const Color(0xFFEAEAEA)
-                            : Colors.transparent,
-                        borderRadius: BorderRadius.circular(9),
-                        child: InkWell(
+                      child: MouseRegion(
+                        onEnter: (_) => setState(() => _hoveredHistoryId = id),
+                        onExit: (_) => setState(() => _hoveredHistoryId = null),
+                        child: Material(
+                          color: item['id'] == agent.runId
+                              ? const Color(0xFFEAEAEA)
+                              : Colors.transparent,
                           borderRadius: BorderRadius.circular(9),
-                          onTap: agent.busy
-                              ? null
-                              : () => agent.load(item['id'] as String),
-                          child: Padding(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 13,
-                              vertical: 11,
-                            ),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  item['question'] as String,
-                                  maxLines: 2,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: const TextStyle(
-                                    fontSize: 12,
-                                    height: 1.6,
+                          child: InkWell(
+                            borderRadius: BorderRadius.circular(9),
+                            onTap: agent.busy
+                                ? null
+                                : () => agent.load(item['id'] as String),
+                            child: Padding(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 13,
+                                vertical: 11,
+                              ),
+                              child: Row(
+                                children: [
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        Text(
+                                          item['question'] as String,
+                                          maxLines: 2,
+                                          overflow: TextOverflow.ellipsis,
+                                          style: const TextStyle(
+                                            fontSize: 12,
+                                            height: 1.6,
+                                          ),
+                                        ),
+                                        const SizedBox(height: 4),
+                                        Text(
+                                          statusLabel(
+                                            item['status'] as String?,
+                                          ),
+                                          style: const TextStyle(
+                                            color: muted,
+                                            fontSize: 10,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
                                   ),
-                                ),
-                                const SizedBox(height: 4),
-                                Text(
-                                  statusLabel(item['status'] as String?),
-                                  style: const TextStyle(
-                                    color: muted,
-                                    fontSize: 10,
+                                  const SizedBox(width: 4),
+                                  SizedBox(
+                                    width: 28,
+                                    height: 28,
+                                    child:
+                                        _hoveredHistoryId == id ||
+                                            _historyMenuId == id
+                                        ? _historyMenu(item)
+                                        : item['pinned'] == true
+                                        ? const Icon(
+                                            Icons.push_pin_outlined,
+                                            size: 14,
+                                            color: muted,
+                                          )
+                                        : const SizedBox.shrink(),
                                   ),
-                                ),
-                              ],
+                                ],
+                              ),
                             ),
                           ),
                         ),
@@ -1365,28 +1398,102 @@ class _WorkspacePageState extends State<WorkspacePage>
   };
   Future<void> _showHistory() => showModalBottomSheet<void>(
     context: context,
-    builder: (context) => ListView(
-      children: [
-        ListTile(
-          leading: const Icon(Icons.add),
-          title: const Text('新建任务'),
-          onTap: () {
-            Navigator.pop(context);
-            agent.newTask();
-          },
-        ),
-        for (final item in agent.history)
+    builder: (context) => AnimatedBuilder(
+      animation: agent,
+      builder: (context, _) => ListView(
+        children: [
           ListTile(
-            title: Text(item['question'] as String),
-            subtitle: Text(statusLabel(item['status'] as String?)),
+            leading: const Icon(Icons.add),
+            title: const Text('新建任务'),
             onTap: () {
               Navigator.pop(context);
-              agent.load(item['id'] as String);
+              agent.newTask();
             },
           ),
-      ],
+          for (final item in agent.history)
+            ListTile(
+              title: Text(item['question'] as String),
+              subtitle: Text(statusLabel(item['status'] as String?)),
+              trailing: _historyMenu(item),
+              onTap: () {
+                Navigator.pop(context);
+                agent.load(item['id'] as String);
+              },
+            ),
+        ],
+      ),
     ),
   );
+  Widget _historyMenu(Json item) {
+    final id = item['id'] as String;
+    final pinned = item['pinned'] == true;
+    final running = agent.busy && id == agent.runId;
+    return PopupMenuButton<String>(
+      key: ValueKey('history-more-$id'),
+      tooltip: '更多',
+      padding: EdgeInsets.zero,
+      icon: const Icon(Icons.more_horiz, size: 18),
+      onOpened: () => setState(() => _historyMenuId = id),
+      onCanceled: () => setState(() => _historyMenuId = null),
+      onSelected: (action) {
+        setState(() => _historyMenuId = null);
+        if (action == 'pin') agent.pinRun(id, !pinned);
+        if (action == 'delete') unawaited(_deleteHistory(item));
+      },
+      itemBuilder: (_) => [
+        PopupMenuItem(
+          value: 'pin',
+          child: Row(
+            children: [
+              Icon(pinned ? Icons.push_pin : Icons.push_pin_outlined, size: 16),
+              const SizedBox(width: 10),
+              Text(pinned ? '取消置顶' : '置顶'),
+            ],
+          ),
+        ),
+        PopupMenuItem(
+          value: 'delete',
+          enabled: !running,
+          child: Row(
+            children: [
+              Icon(
+                Icons.delete_outline,
+                size: 16,
+                color: running ? muted : const Color(0xFFC84E40),
+              ),
+              const SizedBox(width: 10),
+              const Text('删除'),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Future<void> _deleteHistory(Json item) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('删除任务？'),
+        content: Text('将删除“${item['question']}”的本地记录和生成文件，无法恢复。原始文件不受影响。'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('取消'),
+          ),
+          TextButton(
+            style: TextButton.styleFrom(
+              foregroundColor: const Color(0xFFC84E40),
+            ),
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('删除'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed == true && mounted) agent.deleteRun(item['id'] as String);
+  }
+
   Future<void> _settings() async {
     await Navigator.of(context).push(
       MaterialPageRoute<void>(builder: (_) => ConnectionSettings(agent: agent)),

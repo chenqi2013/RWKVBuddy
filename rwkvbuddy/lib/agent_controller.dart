@@ -179,6 +179,14 @@ class AgentController extends ChangeNotifier {
         );
       case 'history':
         history = _maps(payload['runs']);
+      case 'run.deleted':
+        final deletedId = payload['runId'] as String;
+        history.removeWhere((item) => item['id'] == deletedId);
+        if (runId == deletedId) {
+          newTask();
+        } else {
+          turns.removeWhere((item) => item['id'] == deletedId);
+        }
       case 'run.started':
         run = Map<String, dynamic>.from(payload['run'] as Map);
         events = [];
@@ -312,6 +320,9 @@ class AgentController extends ChangeNotifier {
   }
 
   void cancel() => send({'type': 'cancel', 'runId': runId});
+  void pinRun(String id, bool pinned) =>
+      send({'type': 'run.pin', 'runId': id, 'pinned': pinned});
+  void deleteRun(String id) => send({'type': 'run.delete', 'runId': id});
   void load(String id) {
     if (!busy) send({'type': 'load', 'runId': id});
   }

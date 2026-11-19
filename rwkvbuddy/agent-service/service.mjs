@@ -1,5 +1,5 @@
 import readline from 'node:readline';
-import { mkdirSync, existsSync, readdirSync, readFileSync, copyFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, existsSync, readdirSync, readFileSync, copyFileSync, writeFileSync, renameSync, rmSync, lstatSync } from 'node:fs';
 import { join, resolve, dirname, extname, relative, sep, isAbsolute } from 'node:path';
 import { homedir } from 'node:os';
 import { AgentRun } from './src/engine.mjs';
@@ -14,6 +14,17 @@ const legacyMacRoot = join(homedir(), '.local', 'share', 'RWKVBuddy', 'runs');
 const dataRoot = process.env.RWKVBUDDY_DATA_DIR || (process.platform === 'darwin' && existsSync(legacyMacRoot) ? legacyMacRoot :
   join(process.env.APPDATA || join(homedir(), ...(process.platform === 'darwin' ? ['Library', 'Application Support'] : ['.local', 'share'])), 'RWKVBuddy', 'runs'));
 mkdirSync(dataRoot, { recursive: true });
+const pinsPath = join(dataRoot, 'pinned-runs.json');
+let savedPins = [];
+try {
+  const value = JSON.parse(readFileSync(pinsPath, 'utf8'));
+  if (Array.isArray(value)) savedPins = value.filter(id => typeof id === 'string');
+} catch {}
+const pinnedRuns = new Set(savedPins);
+function savePins() {
+  writeFileSync(`${pinsPath}.tmp`, JSON.stringify([...pinnedRuns]));
+  renameSync(`${pinsPath}.tmp`, pinsPath);
+}
 let active;
 let activePromise;
 let shuttingDown = false;
@@ -32,15 +43,35 @@ function history() {
     try {
       const run = savedRun(entry.name);
       return [{ id: run.id, question: run.question, status: run.status, createdAt: run.createdAt,
-        mode: run.mode, workspace: run.workspace }];
+        mode: run.mode, workspace: run.workspace, pinned: pinnedRuns.has(run.id) }];
     } catch { return []; }
-  }).sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, 60);
+  }).sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.createdAt.localeCompare(a.createdAt)).slice(0, 60);
 }
 function processCommand(command) {
   if (shuttingDown) return;
   try {
     switch (command.type) {
       case 'history': send({ type: 'history', payload: { runs: history() } }); break;
+      case 'run.pin': {
+        savedRun(command.runId);
+        if (typeof command.pinned !== 'boolean') throw new Error('置顶状态无效');
+        if (command.pinned) pinnedRuns.add(command.runId); else pinnedRuns.delete(command.runId);
+        savePins();
+        send({ type: 'history', payload: { runs: history() } });
+        break;
+      }
+      case 'run.delete': {
+        savedRun(command.runId);
+        if (active?.id === command.runId) throw new Error('请先停止正在运行的任务，再删除');
+        const directory = join(dataRoot, command.runId);
+        if (lstatSync(directory).isSymbolicLink()) throw new Error('不能删除符号链接任务目录');
+        rmSync(directory, { recursive: true });
+        pinnedRuns.delete(command.runId);
+        savePins();
+        send({ type: 'run.deleted', payload: { runId: command.runId } });
+        send({ type: 'history', payload: { runs: history() } });
+        break;
+      }
       case 'load': {
         const run = savedRun(command.runId);
         const turns = [];
