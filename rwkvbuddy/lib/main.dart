@@ -16,6 +16,20 @@ const muted = Color(0xFF8A8A8A);
 const surface = Color(0xFFF7F7F7);
 const line = Color(0xFFE8E8E8);
 
+String taskDateLabel(String? timestamp, {DateTime? now}) {
+  final created = DateTime.tryParse(timestamp ?? '')?.toLocal();
+  if (created == null) return '';
+  final current = (now ?? DateTime.now()).toLocal();
+  final days = DateTime.utc(
+    current.year,
+    current.month,
+    current.day,
+  ).difference(DateTime.utc(created.year, created.month, created.day)).inDays;
+  if (days <= 0) return '今天';
+  if (days == 1) return '昨天';
+  return '$days天前';
+}
+
 void main() => runApp(const MyApp());
 
 class MyApp extends StatelessWidget {
@@ -496,8 +510,8 @@ class _WorkspacePageState extends State<WorkspacePage>
                                         ),
                                         const SizedBox(height: 4),
                                         Text(
-                                          statusLabel(
-                                            item['status'] as String?,
+                                          taskDateLabel(
+                                            item['createdAt'] as String?,
                                           ),
                                           style: const TextStyle(
                                             color: muted,
@@ -693,6 +707,33 @@ class _WorkspacePageState extends State<WorkspacePage>
     (Icons.summarize_outlined, '内容总结', '总结这些资料的关键内容，提炼结论和待办事项。'),
     (Icons.note_add_outlined, '生成报告', '根据这些资料生成一份结构清晰、包含结论和建议的 Word 报告。'),
   ];
+  static const _suggestions = [
+    [
+      ('对比两份合同，找出差异与风险', '请对比这两份合同，逐项列出差异、风险和修改建议。', false),
+      ('提取文档中的关键信息', '请提取这些文档中的关键条款、金额、日期和责任方，并注明来源。', false),
+      ('润色文档并生成新副本', '请润色这份文档，保留原意，改善表达，并生成一份 Word 新副本。', false),
+    ],
+    [
+      ('分析表格中的趋势与异常', '请分析这些表格中的关键指标、变化趋势和异常数据，并注明分析依据。', false),
+      ('汇总多份表格的关键指标', '请汇总这些表格的关键指标，说明统计口径和缺失数据，并生成汇总表。', false),
+      ('经营与资金分析', '分析三家公司的经营与资金情况，指出异常并给我一份报告。', true),
+    ],
+    [
+      ('这个工程用了哪些技术栈？', '这是一个什么工程？请分析它的功能、技术栈和目录结构。', false),
+      ('梳理项目入口与核心模块', '请读取项目说明、依赖清单和入口代码，梳理启动流程与核心模块。', false),
+      ('查找某项功能的实现位置', '请根据项目代码定位主要功能的实现文件，说明调用关系并引用实际读取的代码。', false),
+    ],
+    [
+      ('总结资料中的关键结论', '请总结这些资料的关键内容，提炼主要结论，并注明来源。', false),
+      ('从会议记录中提取待办', '请从会议记录中提取决议、待办事项、负责人和截止时间，未提供的信息请标明。', false),
+      ('归纳多份资料的共识与分歧', '请归纳这些资料的共同观点、主要分歧和待确认的问题，并注明来源。', false),
+    ],
+    [
+      ('把这些资料整理成一份报告', '根据这些资料生成一份结构清晰、包含结论和建议的 Word 报告。', false),
+      ('整理本周进展与下周计划', '请根据这些资料整理本周完成事项、当前问题和下周计划，并生成周报 Word 文档。', false),
+      ('生成项目分析报告', '请结合项目说明和实际代码，整理功能、技术栈、目录结构与待确认问题，生成项目分析 Word 报告。', false),
+    ],
+  ];
 
   void _fillPrompt(String text) {
     prompt.text = text;
@@ -724,12 +765,6 @@ class _WorkspacePageState extends State<WorkspacePage>
                             letterSpacing: -1.1,
                           ),
                         ),
-                        const SizedBox(height: 12),
-                        const Text(
-                          '读懂资料，整理想法，完成工作。',
-                          textAlign: TextAlign.center,
-                          style: TextStyle(color: muted, fontSize: 13),
-                        ),
                         SizedBox(height: compact ? 30 : 42),
                         Wrap(
                           spacing: 8,
@@ -752,17 +787,12 @@ class _WorkspacePageState extends State<WorkspacePage>
                         Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            _suggestion(
-                              '对比两份合同，找出差异与风险',
-                              '请对比这两份合同，逐项列出差异、风险和修改建议。',
-                            ),
-                            _suggestion('这个工程用了哪些技术栈？', _categories[2].$3),
-                            _suggestion('把这些资料整理成一份报告', _categories[4].$3),
-                            _suggestion(
-                              '经营与资金分析',
-                              '分析三家公司的经营与资金情况，指出异常并给我一份报告。',
-                              sample: true,
-                            ),
+                            for (final suggestion in _suggestions[_category])
+                              _suggestion(
+                                suggestion.$1,
+                                suggestion.$2,
+                                sample: suggestion.$3,
+                              ),
                           ],
                         ),
                       ],
@@ -1413,7 +1443,7 @@ class _WorkspacePageState extends State<WorkspacePage>
           for (final item in agent.history)
             ListTile(
               title: Text(item['question'] as String),
-              subtitle: Text(statusLabel(item['status'] as String?)),
+              subtitle: Text(taskDateLabel(item['createdAt'] as String?)),
               trailing: _historyMenu(item),
               onTap: () {
                 Navigator.pop(context);

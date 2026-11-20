@@ -12,6 +12,29 @@ class HistoryController extends AgentController {
 }
 
 void main() {
+  test(
+    'history dates use calendar days including midnight and month boundaries',
+    () {
+      final now = DateTime(2026, 3, 1, 0, 5);
+      expect(
+        taskDateLabel(DateTime(2026, 3, 1).toIso8601String(), now: now),
+        '今天',
+      );
+      expect(
+        taskDateLabel(
+          DateTime(2026, 2, 28, 23, 55).toUtc().toIso8601String(),
+          now: now,
+        ),
+        '昨天',
+      );
+      expect(
+        taskDateLabel(DateTime(2026, 2, 26).toIso8601String(), now: now),
+        '3天前',
+      );
+      expect(taskDateLabel(null, now: now), '');
+      expect(taskDateLabel('invalid', now: now), '');
+    },
+  );
   testWidgets(
     'hover menu pins, unpins and confirms deletion without opening the task',
     (tester) async {
@@ -22,10 +45,17 @@ void main() {
       final agent = HistoryController();
       addTearDown(agent.dispose);
       agent.history = [
-        {'id': 'first', 'question': '分析合同', 'status': 'completed'},
+        {
+          'id': 'first',
+          'question': '分析合同',
+          'status': 'completed',
+          'createdAt': DateTime.now().toIso8601String(),
+        },
         {'id': 'second', 'question': '整理表格', 'status': 'completed'},
       ];
       await tester.pumpWidget(MyApp(controller: agent));
+      expect(find.text('今天'), findsOneWidget);
+      expect(find.text('已完成'), findsNothing);
       final first = find.byKey(const ValueKey('history-item-first'));
       final menu = find.byKey(const ValueKey('history-more-first'));
       expect(menu, findsNothing);
