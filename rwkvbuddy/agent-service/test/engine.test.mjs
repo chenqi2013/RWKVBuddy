@@ -90,6 +90,39 @@ test('failed model request remains failed without replacing its answer with loca
   assert.equal(state.traces.at(-1).status, 'failed');
 });
 
+test('text follow-ups refresh the current instruction while preserving generated files and history', async (t) => {
+  const root = await scratch(t);
+  const questions = ['你是谁？', '你知道中国的四大名著是哪四个？', '你有什么技能？', '1+2+3等于多少？'];
+  const context = { turns: [] };
+  let previousSnapshot;
+  let firstSnapshot;
+  let previousHash;
+  for (const [index, question] of questions.entries()) {
+    const provider = { generate: async (instruction, payload) => {
+      assert.equal(payload.question, question);
+      assert.equal(payload.sourceTexts.find(file => file.path === '用户指令.txt').excerpt, question);
+      assert.deepEqual(payload.previousTurn.turns, context.turns);
+      assert.match(instruction, /常识问答可使用通用知识/);
+      if (index) assert.ok(payload.sourceTexts.some(file => file.path === '成果/说明.txt' && file.excerpt === '保留生成文件'));
+      return { answer: `回答：${question}`, ...(index ? {} : { files: [{ name: '说明.txt', content: '保留生成文件' }] }) };
+    } };
+    const run = new AgentRun({ question, mode: 'rwkv', sourceMode: 'text', reuseSnapshot: previousSnapshot,
+      context: structuredClone(context) }, join(root, 'runs'), () => {}, { provider });
+    const state = await run.execute();
+    assert.equal(state.status, 'completed', state.error);
+    const snapshot = JSON.parse(await readFile(join(run.directory, 'inputs.snapshot.json'), 'utf8'));
+    assert.equal(snapshot.files['用户指令.txt'].content, question);
+    assert.equal(snapshot.files['用户指令.txt'].hash, snapshot.inputHashes['用户指令.txt']);
+    if (index) assert.notEqual(snapshot.snapshotHash, previousHash);
+    previousHash = snapshot.snapshotHash;
+    context.turns.push({ question, answer: state.answer });
+    previousSnapshot = join(run.directory, index ? 'inputs.snapshot.json' : 'outputs.snapshot.json');
+    if (!index) firstSnapshot = previousSnapshot;
+  }
+  const original = JSON.parse(await readFile(firstSnapshot, 'utf8'));
+  assert.equal(original.files['用户指令.txt'].content, questions[0]);
+});
+
 test('attachment tools decode JSON argument objects and return malformed parameter errors for correction', async (t) => {
   const root = await scratch(t);
   const file = join(root, '资料.txt');

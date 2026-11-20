@@ -48,7 +48,6 @@ class AgentController extends ChangeNotifier {
   String activeConnectionId = '';
   bool inputsChanged = false;
   bool busy = false;
-  bool generateFiles = false;
   String error = '';
   String notice = '';
   String workspace = '';
@@ -273,11 +272,6 @@ class AgentController extends ChangeNotifier {
 
   void start(String question) {
     if (busy || question.trim().isEmpty) return;
-    if (generateFiles && mode == 'local') {
-      error = '生成文件需要模型，请先启用在线 API 或本地模型连接';
-      update();
-      return;
-    }
     if (sourceMode == 'files' && selectedFiles.isEmpty) {
       error = '请先添加文件或选择资料目录';
       update();
@@ -312,7 +306,7 @@ class AgentController extends ChangeNotifier {
       'reuseInputs': reuse,
       'selectedFiles': List<String>.from(selectedFiles),
       'mode': mode,
-      'outputMode': generateFiles ? 'files' : 'auto',
+      'outputMode': 'auto',
       'config': config,
     });
     inputsChanged = false;
@@ -335,7 +329,6 @@ class AgentController extends ChangeNotifier {
     turns = [];
     error = '';
     notice = '';
-    generateFiles = false;
     sourceMode = 'directory';
     workspace = '';
     selectedFiles = [];

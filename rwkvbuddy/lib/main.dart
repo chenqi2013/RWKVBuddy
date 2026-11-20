@@ -821,10 +821,6 @@ class _WorkspacePageState extends State<WorkspacePage>
         borderRadius: BorderRadius.circular(20),
         onTap: () {
           setState(() => _category = index);
-          if (index == 4) {
-            agent.generateFiles = true;
-            agent.update();
-          }
           _fillPrompt(item.$3);
         },
         child: Padding(
@@ -975,36 +971,6 @@ class _WorkspacePageState extends State<WorkspacePage>
               const SizedBox(height: 7),
               Row(
                 children: [
-                  IconButton(
-                    key: const Key('add-files'),
-                    tooltip: '添加文件',
-                    onPressed: agent.busy ? null : chooseFiles,
-                    icon: const Icon(Icons.add_rounded, size: 22),
-                    visualDensity: VisualDensity.compact,
-                  ),
-                  const SizedBox(width: 3),
-                  FilterChip(
-                    key: const Key('generate-files'),
-                    label: const Text('生成文件', style: TextStyle(fontSize: 11)),
-                    avatar: const Icon(Icons.note_add_outlined, size: 15),
-                    showCheckmark: false,
-                    selected: agent.generateFiles,
-                    side: BorderSide(
-                      color: agent.generateFiles
-                          ? const Color(0xFFD5DBD7)
-                          : Colors.transparent,
-                    ),
-                    backgroundColor: Colors.transparent,
-                    selectedColor: const Color(0xFFEEF2EF),
-                    padding: EdgeInsets.zero,
-                    visualDensity: VisualDensity.compact,
-                    onSelected: agent.busy
-                        ? null
-                        : (value) {
-                            agent.generateFiles = value;
-                            agent.update();
-                          },
-                  ),
                   Expanded(
                     child: Align(
                       alignment: Alignment.centerRight,

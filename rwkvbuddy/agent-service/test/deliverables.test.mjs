@@ -49,7 +49,7 @@ test('invalid batches, traversal, duplicate names and invalid worksheets publish
   assert.deepEqual(await readdir(root), []);
 });
 
-test('remote generation persists files, emits real creation traces, and makes actual output available to follow-up edits', async (t) => {
+test('automatic file generation persists outputs and makes them available to follow-up edits without a file switch', async (t) => {
   const root = await scratch(t);
   const original = join(root, '原文.txt');
   await writeFile(original, '预算 100 元。');
@@ -57,7 +57,7 @@ test('remote generation persists files, emits real creation traces, and makes ac
   const provider = { generate: async (instruction, payload) => {
     return { answer: '已把预算修改为 200 元。', files: [{ name: '修改版.txt', content: '预算 200 元。' }] };
   } };
-  const run = new AgentRun({ question: '预算改为 200 元，生成新文件', sourceMode: 'files', selectedFiles: [original], mode: 'rwkv', outputMode: 'files' }, join(root, 'runs'), (event) => events.push(event), { provider });
+  const run = new AgentRun({ question: '预算改为 200 元，生成新文件', sourceMode: 'files', selectedFiles: [original], mode: 'rwkv', outputMode: 'auto' }, join(root, 'runs'), (event) => events.push(event), { provider });
   const state = await run.execute();
   assert.equal(state.status, 'completed');
   assert.equal(await readFile(original, 'utf8'), '预算 100 元。');
@@ -71,7 +71,7 @@ test('remote generation persists files, emits real creation traces, and makes ac
       return { answer: '已修改上一版。', files: [{ name: '修改版v2.txt', content: '预算 300 元。' }] };
 
   } };
-  const next = new AgentRun({ question: '把上一版改为 300 元', sourceMode: 'files', selectedFiles: [original], reuseSnapshot: join(run.directory, 'outputs.snapshot.json'), mode: 'rwkv', outputMode: 'files' }, join(root, 'runs'), () => {}, { provider: followupProvider });
+  const next = new AgentRun({ question: '把上一版改为 300 元', sourceMode: 'files', selectedFiles: [original], reuseSnapshot: join(run.directory, 'outputs.snapshot.json'), mode: 'rwkv', outputMode: 'auto' }, join(root, 'runs'), () => {}, { provider: followupProvider });
   const nextState = await next.execute();
   assert.equal(nextState.status, 'completed');
   assert.equal(await readFile(nextState.deliverables[0].path, 'utf8'), '预算 300 元。');

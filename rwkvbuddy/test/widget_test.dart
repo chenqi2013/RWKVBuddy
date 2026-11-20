@@ -44,7 +44,7 @@ void main() {
     },
   );
   testWidgets(
-    'file generation can be selected and actual generated files remain downloadable in history',
+    'composer removes redundant controls and generated files remain downloadable in history',
     (tester) async {
       final controller = AgentController(autoConnect: false);
       addTearDown(controller.dispose);
@@ -53,9 +53,9 @@ void main() {
       addTearDown(tester.view.resetPhysicalSize);
       addTearDown(tester.view.resetDevicePixelRatio);
       await tester.pumpWidget(MyApp(controller: controller));
-      await tester.tap(find.byKey(const Key('generate-files')));
-      await tester.pump();
-      expect(controller.generateFiles, isTrue);
+      expect(find.byKey(const Key('generate-files')), findsNothing);
+      expect(find.byKey(const Key('add-files')), findsNothing);
+      expect(find.byTooltip('资料选项'), findsOneWidget);
       controller.run = {
         'id': 'history',
         'question': '修改文档',
@@ -88,17 +88,23 @@ void main() {
       addTearDown(tester.view.resetPhysicalSize);
       addTearDown(tester.view.resetDevicePixelRatio);
       await tester.pumpWidget(MyApp(controller: controller));
-      await tester.tap(find.byKey(const Key('add-files')));
+      await tester.tap(find.byTooltip('资料选项'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('添加文件'));
       await tester.pumpAndSettle();
       expect(controller.sourceMode, 'files');
       expect(controller.selectedFiles.length, 2);
       expect(find.text('合同.docx'), findsOneWidget);
       expect(find.text('销售.xlsx'), findsOneWidget);
-      await tester.tap(find.byKey(const Key('add-files')));
+      await tester.tap(find.byTooltip('资料选项'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('添加文件'));
       await tester.pumpAndSettle();
       expect(controller.selectedFiles.length, 2);
       picker.result = [];
-      await tester.tap(find.byKey(const Key('add-files')));
+      await tester.tap(find.byTooltip('资料选项'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('添加文件'));
       await tester.pumpAndSettle();
       expect(controller.selectedFiles.length, 2);
       await tester.tap(
