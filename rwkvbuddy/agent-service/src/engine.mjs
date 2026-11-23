@@ -335,12 +335,37 @@ export class AgentRun {
           }
         }
         } finally { if (taskTimer) clearTimeout(taskTimer); }
-        if (typeof result?.answer !== 'string' || !result.answer.trim() || result.answer.length > 32000) throw new Error('模型未提交有效回答');
-        this.state.answer = result.answer;
+        const validAnswer = typeof result?.answer === 'string' && result.answer.trim() && result.answer.length <= 32000;
+        if (!validAnswer && !result?.files?.length) throw new Error('模型未提交有效回答');
+        this.state.answer = validAnswer ? result.answer : '';
         if (this.state.outputMode === 'files' && (!Array.isArray(result.files) || !result.files.length)) throw new Error('模型未提交文件内容，未生成成果文件');
         if (result.files !== undefined && (!Array.isArray(result.files) || result.files.length)) {
-          const delivery = await this.trace(null, 'tool', 'files.create', { files: result.files },
-            async () => createDeliverables(result.files, this.directory, this.signal));
+          let delivery;
+          for (let repair = 0; repair <= 2; repair++) {
+            try {
+              if (typeof result.answer !== 'string' || !result.answer.trim() || result.answer.length > 32000) {
+                throw Object.assign(new Error('文件响应缺少有效的 answer 字符串，请同时提交 answer 和 files，并检查 Excel sheets 工作表结构'), { code: 'DELIVERY_INVALID_SPEC' });
+              }
+              delivery = await this.trace(null, 'tool', 'files.create', { files: result.files },
+                async () => createDeliverables(result.files, this.directory, this.signal));
+              break;
+            } catch (error) {
+              if (this.signal.aborted || error.code !== 'DELIVERY_INVALID_SPEC' || repair === 2) throw error;
+              const message = `文件结构校验失败，正在请求模型修正（${repair + 1}/2）；尚未生成成果文件。`;
+              this.event('files.recovering', { attempt: repair + 1, error: error.message, message });
+              const feedback = { attempt: repair + 1, error: error.message,
+                rejectedFiles: JSON.stringify(result.files).length <= 60000 ? result.files
+                  : Array.isArray(result.files) ? result.files.map(file => ({ name: file?.name })) : [] };
+              result = await this.generate(null, '你是文件结构修正助手。本轮文件生成工具已拒绝提交，失败详情见 deliveryFeedback。' +
+                '请修正文件结构并重新提交完整的 {progress,answer,files} JSON，files 必须非空。' +
+                '保持用户要求的文件格式、文件名和原有数据，不虚构新数据，不改成其他格式，不再调用读取工具。' +
+                'Excel 使用 sheets:[{name,rows:[[单元格,...],...]}]，不能用 content 字符串；提交后程序会实际生成文件，回答不要沿用无法下载或让用户自行保存的错误说明。\n' + deliveryInstruction,
+              { question: this.state.question, deliveryFeedback: feedback });
+              if (result.tool || typeof result.answer !== 'string' || !result.answer.trim() || result.answer.length > 32000
+                  || !Array.isArray(result.files) || !result.files.length) throw new Error('模型修正响应未提交有效回答和文件，尚未完成文件交付');
+              this.state.answer = result.answer;
+            }
+          }
           this.state.deliverables = delivery.files;
           const nextSnapshot = structuredClone(snapshot);
           for (const [name, content] of Object.entries(delivery.texts)) {

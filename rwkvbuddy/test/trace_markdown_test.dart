@@ -7,6 +7,102 @@ import 'package:rwkvbuddy/agent_controller.dart';
 import 'package:rwkvbuddy/trace_view.dart';
 
 void main() {
+  testWidgets(
+    'file retries distinguish recovery, success and final failure while preserving original errors',
+    (tester) async {
+      final agent = AgentController(autoConnect: false);
+      addTearDown(agent.dispose);
+      const error = '财务汇总.xlsx：工作簿需要 1–8 个工作表';
+      final failed = <String, dynamic>{
+        'id': 'failed-file',
+        'kind': 'tool',
+        'name': 'files.create',
+        'status': 'failed',
+        'input': {
+          'files': [
+            {'name': '财务汇总.xlsx', 'content': '表格文字'},
+          ],
+        },
+        'error': error,
+      };
+      final repair = <String, dynamic>{
+        'id': 'repair',
+        'kind': 'model',
+        'name': 'rwkv',
+        'status': 'completed',
+        'input': {
+          'deliveryFeedback': {'attempt': 1},
+        },
+        'output': '{"answer":"已提交"}',
+      };
+      final created = <String, dynamic>{
+        'id': 'created-file',
+        'kind': 'tool',
+        'name': 'files.create',
+        'status': 'completed',
+        'input': {},
+        'output': jsonEncode({
+          'files': [
+            {'name': '财务汇总.xlsx'},
+          ],
+        }),
+      };
+      agent.run = {'id': 'run', 'status': 'running'};
+      agent.traces = [failed, repair];
+      Future<void> render({Json? turn}) async {
+        await tester.pumpWidget(
+          MaterialApp(
+            home: Scaffold(
+              body: ListView(
+                children: [
+                  TraceView(agent: agent, turn: turn, onExport: () {}),
+                ],
+              ),
+            ),
+          ),
+        );
+        await tester.pump();
+      }
+
+      await render();
+      expect(find.textContaining('正在请求模型修正'), findsOneWidget);
+      expect(find.text(error), findsNothing);
+      agent.run!['status'] = 'completed';
+      agent.traces.add(created);
+      await render();
+      expect(find.textContaining('后续已修复并生成文件'), findsOneWidget);
+      expect(find.textContaining('正在请求模型修正'), findsNothing);
+      expect(failed['status'], 'failed');
+      expect(failed['error'], error);
+      await tester.tap(find.byKey(const ValueKey('details-failed-file')));
+      await tester.pumpAndSettle();
+      expect(find.text(error), findsOneWidget);
+      await tester.tap(find.byKey(const ValueKey('details-failed-file')));
+      await tester.pumpAndSettle();
+      final historical = <String, dynamic>{
+        'id': 'older',
+        'status': 'completed',
+        'traces': [failed, repair, created],
+      };
+      agent.traces = [];
+      await render(turn: historical);
+      expect(find.textContaining('后续已修复并生成文件'), findsOneWidget);
+      historical['traces'] = [
+        failed,
+        repair,
+        {...created, 'output': '{"files":[{"name":"其他.xlsx"}]}'},
+      ];
+      await render(turn: historical);
+      expect(find.textContaining('后续已修复并生成文件'), findsNothing);
+      expect(find.text(error), findsOneWidget);
+      historical['status'] = 'partial';
+      historical['traces'] = [failed, repair];
+      await render(turn: historical);
+      expect(find.textContaining('正在请求模型修正'), findsNothing);
+      expect(find.text(error), findsOneWidget);
+    },
+  );
+
   testWidgets('format recovery is shown separately from token truncation', (
     tester,
   ) async {

@@ -214,7 +214,7 @@ class _TraceViewState extends State<TraceView> {
               trace['status'] == 'completed' &&
               (trace['answerPreview'] as String? ?? '').isEmpty &&
               (trace['progress'] as String? ?? '').isEmpty))
-            _step(trace),
+            _step(trace, recovery: _fileRecovery(trace, traces, runStatus)),
           if (trace['name'] == 'input.read') _readList(reads),
         ],
         if (runStatus == 'completed' &&
@@ -737,7 +737,38 @@ class _TraceViewState extends State<TraceView> {
     );
   }
 
-  Widget _step(Json trace) => Container(
+  String? _fileRecovery(Json trace, List<Json> traces, dynamic runStatus) {
+    if (trace['name'] != 'files.create' || trace['status'] != 'failed')
+      return null;
+    final requested = (parsed(trace['input'])['files'] as List? ?? [])
+        .whereType<Map>()
+        .map((file) => file['name'])
+        .whereType<String>()
+        .toSet();
+    if (requested.isEmpty) return null;
+    final later = traces.skip(traces.indexOf(trace) + 1);
+    final created = later
+        .where(
+          (item) =>
+              item['name'] == 'files.create' && item['status'] == 'completed',
+        )
+        .expand((item) => parsed(item['output'])['files'] as List? ?? [])
+        .whereType<Map>()
+        .map((file) => file['name'])
+        .whereType<String>()
+        .toSet();
+    if (created.containsAll(requested)) return 'recovered';
+    if (runStatus == 'running' &&
+        later.any(
+          (item) =>
+              item['kind'] == 'model' &&
+              parsed(item['input'])['deliveryFeedback'] is Map,
+        ))
+      return 'retrying';
+    return null;
+  }
+
+  Widget _step(Json trace, {String? recovery}) => Container(
     margin: const EdgeInsets.only(bottom: 8),
     decoration: BoxDecoration(
       border: Border.all(
@@ -762,7 +793,13 @@ class _TraceViewState extends State<TraceView> {
             children: [
               Padding(
                 padding: const EdgeInsets.only(top: 2),
-                child: _indicator(trace['status'] as String?),
+                child: _indicator(
+                  recovery == 'recovered'
+                      ? 'completed'
+                      : recovery == 'retrying'
+                      ? 'running'
+                      : trace['status'] as String?,
+                ),
               ),
               const SizedBox(width: 10),
               Expanded(
@@ -816,14 +853,30 @@ class _TraceViewState extends State<TraceView> {
                       [
                         if (trace['kind'] == 'model' || trace['kind'] == 'tool')
                           '${trace['name']}',
-                        statusLabel(trace['status'] as String?),
+                        recovery == 'recovered'
+                            ? '失败后已修复'
+                            : recovery == 'retrying'
+                            ? '正在自动修正'
+                            : statusLabel(trace['status'] as String?),
                         if (trace['durationMs'] != null)
                           '${(trace['durationMs'] / 1000).toStringAsFixed(1)} 秒',
                       ].join(' · '),
                       style: const TextStyle(fontSize: 10, color: Colors.grey),
                     ),
                     _operation(trace),
-                    if (trace['error'] != null)
+                    if (recovery != null)
+                      Text(
+                        recovery == 'recovered'
+                            ? '本次文件结构校验未通过，后续已修复并生成文件。原始错误可在调用详情查看。'
+                            : '文件结构校验未通过，正在请求模型修正；尚未生成文件。',
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: recovery == 'recovered'
+                              ? const Color(0xFF708876)
+                              : const Color(0xFFA77824),
+                        ),
+                      ),
+                    if (trace['error'] != null && recovery == null)
                       Text(
                         '${trace['error']}',
                         style: const TextStyle(

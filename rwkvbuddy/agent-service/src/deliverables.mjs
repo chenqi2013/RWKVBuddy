@@ -9,8 +9,10 @@ export const deliveryInstruction = `除回答外，如用户要求生成、修�
 文件均为新副本，不能声称覆盖原件。只根据实际读取的内容生成，不虚构未读取部分已修改，也不能用省略号代替用户要求的完整正文。
 格式：{"answer":"Markdown 中文回答","files":[{"name":"成果.docx","content":"完整正文，使用换行分段"}]}。
 支持 .docx、.md、.txt、.csv、.json；这些格式使用 content 字符串，.json 必须为有效 JSON。
-.xlsx 使用 {"name":"结果.xlsx","sheets":[{"name":"数据","rows":[["项目","金额"],["示例",100]]}]}，单元格只允许文字、数字、布尔值或 null。
+.xlsx 必须使用 sheets 工作表数组，完整响应示例：{"answer":"已提交 Excel 数据，程序将生成文件。","files":[{"name":"结果.xlsx","sheets":[{"name":"数据","rows":[["项目","金额"],["示例",100]]}]}]}。
+Excel 必须有 1–8 个工作表，每个工作表提供 name 和 rows 二维数组；单元格只允许文字、数字、布尔值或 null。不得使用 content 中的 Markdown 表格、CSV 或普通文字冒充 .xlsx。
 不要返回文件路径或下载链接，程序会实际生成文件并展示下载按钮。未要求文件时 files=[]。
+你只需提交结构化文件数据，由本机工具写入文件；不要声称环境无法生成或下载文件，也不要让用户把文字自行另存为 .xlsx。
 DOCX/XLSX 根据提取内容重新生成，不保留原件复杂排版、公式和图表，回答须说明相关局限。`;
 
 function validate(specs) {
@@ -32,7 +34,7 @@ function validate(specs) {
       if (extension === '.json') { try { JSON.parse(spec.content); } catch { throw new Error('生成的 JSON 文件格式无效'); } }
       return { name, extension, content: spec.content };
     }
-    if (!Array.isArray(spec.sheets) || !spec.sheets.length || spec.sheets.length > 8) throw new Error('工作簿需要 1–8 个工作表');
+    if (!Array.isArray(spec.sheets) || !spec.sheets.length || spec.sheets.length > 8) throw new Error(`${name}：工作簿需要 1–8 个工作表，请提供 sheets 数组，每项为 {name, rows}；.xlsx 不能使用 content 文本代替工作表`);
     const sheetNames = new Set();
     let cells = 0;
     for (const sheet of spec.sheets) {
@@ -51,7 +53,10 @@ function validate(specs) {
 }
 
 export async function createDeliverables(specs, directory, signal) {
-  const files = validate(specs);
+  checkAbort(signal);
+  let files;
+  try { files = validate(specs); }
+  catch (error) { error.code = 'DELIVERY_INVALID_SPEC'; throw error; }
   if (!files.length) return { files: [], texts: {} };
   checkAbort(signal);
   await mkdir(directory, { recursive: true });

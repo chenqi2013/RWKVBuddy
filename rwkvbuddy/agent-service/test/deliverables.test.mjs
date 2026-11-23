@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { createDeliverables } from '../src/deliverables.mjs';
 import { readAttachments } from '../src/attachments.mjs';
 import { AgentRun } from '../src/engine.mjs';
+import ExcelJS from 'exceljs';
 
 async function scratch(t) {
   const root = await mkdtemp(join(tmpdir(), 'rwkvbuddy-delivery-'));
@@ -90,4 +91,83 @@ test('missing requested files never yields successful delivery; local mode expla
   const local = await new AgentRun({ ...command, mode: 'local' }, root, () => {}).execute();
   assert.equal(local.status, 'failed');
   assert.match(local.error, /需要模型.*在线 API 或本地模型/);
+});
+
+test('invalid RWKV Excel content is sent back for repair and creates a real workbook with preserved failure traces', async (t) => {
+  const root = await scratch(t);
+  const rejected = [{ name: '财务汇总.xlsx', content: '| 公司 | 金额 |\n|---|---|\n| 示例 | 123 |' }];
+  let calls = 0;
+  const events = [];
+  const provider = { generate: async (instruction, payload) => {
+    calls++;
+    if (calls === 1) return { answer: '无法直接提供下载，请自己保存。', files: rejected };
+    assert.match(instruction, /本轮文件生成工具已拒绝提交/);
+    assert.equal(payload.previousTurn, undefined);
+    assert.match(payload.deliveryFeedback.error, /财务汇总.xlsx.*sheets/);
+    assert.deepEqual(payload.deliveryFeedback.rejectedFiles, rejected);
+    assert.equal(payload.question, '以.xlsx格式保存');
+    return { answer: '已提交工作表，生成财务汇总文件。', files: [{ name: '财务汇总.xlsx', sheets: [{ name: '汇总', rows: [['公司', '金额'], ['示例', 123]] }] }] };
+  } };
+  const run = new AgentRun({ question: '以.xlsx格式保存', mode: 'rwkv', sourceMode: 'text' }, root, event => events.push(event), { provider });
+  const state = await run.execute();
+  assert.equal(state.status, 'completed', state.error);
+  assert.equal(calls, 2);
+  assert.equal(state.deliverables.length, 1);
+  assert.ok(!state.answer.includes('自己保存'));
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.readFile(state.deliverables[0].path);
+  assert.equal(workbook.worksheets.length, 1);
+  assert.equal(workbook.worksheets[0].getCell('B2').value, 123);
+  const traces = state.traces.filter(trace => trace.name === 'files.create');
+  assert.deepEqual(traces.map(trace => trace.status), ['failed', 'completed']);
+  assert.deepEqual(traces[0].input.files, rejected);
+  assert.equal(events.filter(event => event.type === 'files.recovering').length, 1);
+  assert.equal(events.filter(event => event.type === 'files.created').length, 1);
+});
+
+test('file structure recovery is bounded and never publishes a workbook with repeated invalid sheets', async (t) => {
+  const root = await scratch(t);
+  let calls = 0;
+  const provider = { generate: async () => {
+    calls++;
+    return { answer: '已生成工作簿。', files: [{ name: '汇总.xlsx', content: '普通文字不是工作表' }] };
+  } };
+  const run = new AgentRun({ question: '生成汇总.xlsx', mode: 'rwkv', sourceMode: 'text' }, root, () => {}, { provider });
+  const state = await run.execute();
+  assert.equal(state.status, 'partial');
+  assert.equal(calls, 3);
+  assert.match(state.error, /工作簿需要 1–8 个工作表.*sheets/);
+  assert.deepEqual(state.deliverables, []);
+  assert.equal(state.traces.filter(trace => trace.name === 'files.create' && trace.status === 'failed').length, 3);
+  assert.ok(!(await readdir(run.directory)).includes('outputs'));
+});
+
+test('a file-only model response receives format feedback rather than losing its requested workbook', async (t) => {
+  const root = await scratch(t);
+  let calls = 0;
+  const provider = { generate: async (_instruction, payload) => {
+    if (++calls === 1) return { progress: '整理 Excel', files: [{ name: '结果.xlsx', content: '项目,金额\n示例,123' }] };
+    assert.match(payload.deliveryFeedback.error, /answer.*sheets/);
+    return { answer: '已提交 Excel 数据。', files: [{ name: '结果.xlsx', sheets: [{ name: '数据', rows: [['项目', '金额'], ['示例', 123]] }] }] };
+  } };
+  const state = await new AgentRun({ question: '生成结果.xlsx', mode: 'rwkv', sourceMode: 'text' }, root, () => {}, { provider }).execute();
+  assert.equal(state.status, 'completed', state.error);
+  assert.equal(state.deliverables[0].name, '结果.xlsx');
+  assert.equal(calls, 2);
+});
+
+test('empty repair responses and filesystem errors do not masquerade as successful file delivery', async (t) => {
+  const root = await scratch(t);
+  let calls = 0;
+  const provider = { generate: async () => ++calls === 1
+    ? { answer: '生成文件。', files: [{ name: '数据.xlsx', sheets: [] }] }
+    : { answer: '已生成。', files: [] } };
+  const state = await new AgentRun({ question: '生成数据.xlsx', mode: 'rwkv', sourceMode: 'text' }, root, () => {}, { provider }).execute();
+  assert.equal(state.status, 'partial');
+  assert.match(state.error, /修正响应未提交有效回答和文件/);
+  assert.deepEqual(state.deliverables, []);
+  const blocked = join(root, 'blocked');
+  await writeFile(blocked, '文件而非目录');
+  await assert.rejects(createDeliverables([{ name: '合法.xlsx', sheets: [{ name: '汇总', rows: [[1]] }] }], blocked, new AbortController().signal),
+    error => error.code !== 'DELIVERY_INVALID_SPEC');
 });
