@@ -143,9 +143,10 @@ export class AgentRun {
         trace.characters = length;
         trace.preview = output?.slice(0, 24000) || '';
         if (status.phase) trace.phase = status.phase;
+        if (status.generation) trace.generation = status.generation;
         if (kind === 'model') Object.assign(trace, modelProgress(output));
         this.send({ type: 'trace.delta', runId: this.id, roleId, payload: { id: trace.id, characters: length,
-          phase: trace.phase, progress: trace.progress, answerPreview: trace.answerPreview, pendingTool: trace.pendingTool } });
+          phase: trace.phase, progress: trace.progress, answerPreview: trace.answerPreview, pendingTool: trace.pendingTool, generation: trace.generation } });
       });
       checkAbort(this.signal);
       trace.status = 'completed';
@@ -182,7 +183,7 @@ export class AgentRun {
           let last = 0;
           let phase = '';
           return this.provider.generate(instruction + recovery, payload, this.signal, (length, text, status = {}) => {
-            if (status.phase === phase && Date.now() - last < 250) return;
+            if (!status.metricsFinal && status.phase === phase && Date.now() - last < 250) return;
             phase = status.phase;
             last = Date.now();
             onDelta(length, text, status);

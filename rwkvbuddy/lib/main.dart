@@ -1114,6 +1114,23 @@ class _WorkspacePageState extends State<WorkspacePage>
               style: const TextStyle(fontWeight: FontWeight.w600),
             ),
           ),
+          if (agent.run!['status'] == 'running' &&
+              (agent.run!['mode'] == 'rwkv' ||
+                  agent.traces.any((trace) => trace['kind'] == 'model'))) ...[
+            Tooltip(
+              message: agent.generationSpeed?['source'] == 'estimated'
+                  ? '接口暂未返回 token 数，此值为估算；收到实际用量后更新。'
+                  : '最近一次模型请求的平均生成速度，不含排队和等待首个 token 的时间。',
+              child: Text(
+                agent.generationSpeed?['tokensPerSecond'] is num
+                    ? '${agent.generationSpeed?['source'] == 'estimated' ? '≈ ' : ''}${(agent.generationSpeed!['tokensPerSecond'] as num).toStringAsFixed(1)} tokens/s'
+                    : '-- tokens/s',
+                key: const Key('generation-speed'),
+                style: const TextStyle(fontSize: 11, color: muted),
+              ),
+            ),
+            const SizedBox(width: 8),
+          ],
           _tag(
             statusLabel(agent.run!['status'] as String?),
             _statusColor(agent.run!['status'] as String?),

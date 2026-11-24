@@ -76,6 +76,13 @@ class AgentController extends ChangeNotifier {
       : '${usesLocalModel ? '本地模型' : '在线 API'} · ${config['name'] as String? ?? '模型服务'}';
   String get reportPath => run?['reportPath'] as String? ?? '';
   String get runId => run?['id'] as String? ?? '';
+  Json? get generationSpeed {
+    final models = traces.where((trace) => trace['kind'] == 'model');
+    if (models.isEmpty) return null;
+    final generation = models.last['generation'];
+    return generation is Map ? Map<String, dynamic>.from(generation) : null;
+  }
+
   void update() {
     if (!_disposed) notifyListeners();
   }

@@ -48,6 +48,37 @@ test('chat protocol uses independent messages and rejects non-JSON model output'
   assert.ok(!input.contents);
   assert.equal(input.response_format, undefined);
 });
+
+test('RWKV counts tokens ahead of delayed text without duplicating output or leaking stop tokens', async (t) => {
+  let input;
+  const baseUrl = await server(t, async (request, response) => {
+    input = await body(request);
+    response.writeHead(200, { 'Content-Type': 'text/event-stream' });
+    const records = [
+      { content: '', token: '{"' },
+      { content: '{"', token: 'answer' },
+      { content: 'answer', token: '":"中文"}' },
+      { content: '":"中文"}', token: '<|endoftext|>' },
+    ];
+    for (const record of records) {
+      response.write(`data: ${JSON.stringify({ choices: [{ index: 0, delta: { content: record.content }, token_ids: null, logprobs: { content: [{ token: record.token, bytes: [...Buffer.from(record.token)] }] } }] })}\n\n`);
+      await new Promise(done => setTimeout(done, 40));
+    }
+    response.end(`data: ${JSON.stringify({ choices: [], usage: { prompt_tokens: 30, completion_tokens: 4, total_tokens: 34 } })}\n\ndata: [DONE]\n\n`);
+  });
+  const updates = [];
+  const answer = await new Provider({ baseUrl, model: 'rwkv7-g1m-preview-13.3b', protocol: 'chat' }, new Pool(1))
+    .generate('测试', {}, new AbortController().signal, (_length, text, status) => updates.push({ text, ...status }));
+  assert.deepEqual(answer, { answer: '中文' });
+  assert.equal(input.logprobs, true);
+  assert.deepEqual(input.stream_options, { include_usage: true });
+  const final = updates.at(-1);
+  assert.equal(final.generation.completionTokens, 4);
+  assert.equal(final.generation.source, 'usage');
+  assert.ok(final.generation.tokensPerSecond > 0);
+  assert.ok(updates.some(update => update.generation?.source === 'tokens' && update.generation.tokensPerSecond > 0));
+  assert.ok(updates.every(update => !update.text.includes('�')));
+});
 test('local GGUF chat requests constrained JSON and disables thinking without legacy raw prompts', async (t) => {
   let input;
   const baseUrl = await server(t, async (request, response) => {

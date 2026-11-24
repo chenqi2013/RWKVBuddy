@@ -1,5 +1,6 @@
 import { checkAbort } from './runtime.mjs';
 import { connection, listModels } from './connection.mjs';
+import { GenerationMetrics } from './generation-metrics.mjs';
 
 export class Provider {
   constructor(config, pool) { this.config = config; this.pool = pool; }
@@ -34,7 +35,8 @@ export class Provider {
       const jsonOutput = config.inferenceMode === 'local' || config.jsonOutput === true || options.jsonOutput === true
         || (config.jsonOutput == null && /^rwkv/i.test(model));
       const body = mode === 'chat' ? {
-        model, stream: true, ...generation,
+        model, stream: true, stream_options: { include_usage: true }, ...generation,
+        ...(/^rwkv/i.test(model) ? { logprobs: true } : {}),
         messages: [{ role: 'system', content: system }, { role: 'user', content: user }],
         ...(jsonOutput ? { response_format: { type: 'json_object' } } : {}),
         ...(config.enableThinking === false ? { chat_template_kwargs: { enable_thinking: false }, enable_thinking: false } : {}),
@@ -78,19 +80,27 @@ export class Provider {
       }
       let text = '';
       let finishReason = '';
+      const metrics = new GenerationMetrics();
       onDelta(0, '', { phase: 'waiting' });
       const consume = (line) => {
         const raw = line.trim().replace(/^data:\s*/, '');
         if (!raw || /^(?:event|id|retry):/.test(raw) || raw.startsWith(':') || raw === '[DONE]') return;
         const chunk = JSON.parse(raw);
         if (chunk.error) throw new Error('模型服务返回错误');
+        const generation = metrics.update(chunk);
+        let hasPiece = false;
         for (const choice of chunk.choices || []) {
           if (Number(choice.index ?? 0) !== 0) throw new Error('模型返回无效会话索引');
           if (choice.finish_reason) finishReason = choice.finish_reason;
+          // Token records can arrive ahead of the decoded delta (IRWKV), and
+          // include stop tokens. Use them only for counting, never as text.
           const piece = choice.delta?.content || choice.message?.content || choice.text || '';
           text += piece;
           if (text.length > 64000) throw new Error('模型输出超过限制');
-          if (piece) onDelta(text.length, text, { phase: 'streaming' });
+          if (piece) { hasPiece = true; onDelta(text.length, text, { phase: 'streaming', generation, metricsFinal: Boolean(chunk.usage) }); }
+        }
+        if (!hasPiece && (generation.completionTokens > 0 || chunk.usage)) {
+          onDelta(text.length, text, { phase: 'streaming', generation, metricsFinal: Boolean(chunk.usage) });
         }
       };
       try {
@@ -119,6 +129,7 @@ export class Provider {
         throw requestError(error);
       }
       checkAbort(signal);
+      onDelta(text.length, text, { phase: 'streaming', generation: metrics.update({}), metricsFinal: true });
       if (finishReason === 'length') {
         const error = new Error('模型输出达到 Token 上限，回答被截断；请缩短回答或提高输出上限。');
         error.code = 'MODEL_OUTPUT_TRUNCATED';

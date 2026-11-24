@@ -162,6 +162,23 @@ test('live public model progress is forwarded and kept in completed history', as
   assert.equal(saved.traces.at(-1).progress, '整理当前问题');
 });
 
+test('final usage bypasses stream throttling and speed is persisted in model traces', async (t) => {
+  const root = await scratch(t);
+  const events = [];
+  const generation = { completionTokens: 12, source: 'usage', elapsedMs: 1000, tokensPerSecond: 11 };
+  const provider = { generate: async (_instruction, _payload, _signal, delta) => {
+    delta(10, '{"answer":', { phase: 'streaming', generation: { ...generation, source: 'estimated', tokensPerSecond: 2 } });
+    delta(16, '{"answer":"6"}', { phase: 'streaming', generation, metricsFinal: true });
+    return { answer: '6' };
+  } };
+  const run = new AgentRun({ question: '计算', sourceMode: 'text', mode: 'rwkv' }, root, event => events.push(event), { provider });
+  const state = await run.execute();
+  assert.deepEqual(events.filter(event => event.type === 'trace.delta').at(-1).payload.generation, generation);
+  assert.deepEqual(state.traces.find(trace => trace.kind === 'model').generation, generation);
+  const saved = JSON.parse(await readFile(join(run.directory, 'run.json'), 'utf8'));
+  assert.deepEqual(saved.traces.find(trace => trace.kind === 'model').generation, generation);
+});
+
 test('tool call limit terminates a repeated model loop without claiming completion', async (t) => {
   const root = await scratch(t);
   let calls = 0;
