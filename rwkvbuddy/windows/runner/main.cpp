@@ -57,6 +57,28 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
 
   ::MSG msg;
   while (::GetMessage(&msg, nullptr, 0, 0)) {
+    // Scan-code-zero messages otherwise share Flutter physical key 0x1600000000.
+    // Repair before TranslateMessage so the derived character uses the same key.
+    // Keep IME process keys and Unicode packet input on their native path.
+    if ((msg.message == WM_KEYDOWN || msg.message == WM_KEYUP ||
+         msg.message == WM_SYSKEYDOWN || msg.message == WM_SYSKEYUP) &&
+        (msg.lParam & 0x00ff0000) == 0 && msg.wParam != VK_PACKET &&
+        msg.wParam != VK_PROCESSKEY) {
+      const UINT scan_code = ::MapVirtualKeyExW(
+          static_cast<UINT>(msg.wParam), MAPVK_VK_TO_VSC_EX,
+          ::GetKeyboardLayout(0));
+      if ((scan_code & 0xff) != 0) {
+        msg.lParam |= static_cast<LPARAM>(scan_code & 0xff) << 16;
+        // Windows maps the navigation cluster to the same low scan codes as
+        // the numeric keypad; their extended flag is needed to distinguish them.
+        const bool navigation_key =
+            (msg.wParam >= VK_PRIOR && msg.wParam <= VK_DOWN) ||
+            msg.wParam == VK_INSERT || msg.wParam == VK_DELETE;
+        if ((scan_code & 0xff00) == 0xe000 || navigation_key) {
+          msg.lParam |= static_cast<LPARAM>(1) << 24;
+        }
+      }
+    }
     ::TranslateMessage(&msg);
     ::DispatchMessage(&msg);
   }

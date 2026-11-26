@@ -67,6 +67,10 @@ class AgentController extends ChangeNotifier {
     'protocol': 'chat',
     'concurrency': 2,
   };
+  List<Json> localModels = [];
+  Json localModelState = {'status': 'idle', 'message': '尚未加载模型'};
+  bool localRuntimeAvailable = false;
+  bool localModelOperation = false;
   String get report => run?['report'] as String? ?? '';
   String get answer => run?['answer'] as String? ?? '';
   bool get usesLocalModel =>
@@ -149,6 +153,13 @@ class AgentController extends ChangeNotifier {
           busy = false;
           _process = null;
           error = '本地执行服务已退出（$code），可点击重新连接。';
+          localModelState = {'status': 'idle', 'message': '本地执行服务已退出'};
+          for (final request in _requests.values) {
+            if (!request.isCompleted) {
+              request.complete({'ok': false, 'summary': error});
+            }
+          }
+          _requests.clear();
           update();
         }),
       );
@@ -163,10 +174,19 @@ class AgentController extends ChangeNotifier {
   void _event(Json event) {
     final payload = Map<String, dynamic>.from(event['payload'] as Map? ?? {});
     switch (event['type']) {
+      case 'local.models':
+        _localModels(payload);
+      case 'local.result':
+        _requests.remove(payload['requestId'])?.complete(payload);
       case 'connection.result':
         final id = payload['requestId'] as String?;
         _requests.remove(id)?.complete(payload);
       case 'service.ready':
+        if (payload['localModels'] is Map) {
+          _localModels(
+            Map<String, dynamic>.from(payload['localModels'] as Map),
+          );
+        }
         sampleWorkspace = payload['sampleWorkspace'] as String;
         dataRoot = payload['dataRoot'] as String;
         config['baseUrl'] = payload['baseUrl'];
@@ -279,6 +299,14 @@ class AgentController extends ChangeNotifier {
 
   void start(String question) {
     if (busy || question.trim().isEmpty) return;
+    if (config['localModelId'] != null &&
+        mode == 'rwkv' &&
+        (localModelState['status'] != 'ready' ||
+            localModelState['modelId'] != config['localModelId'])) {
+      error = '请在“模型服务 → 本地模型”中加载此模型后再使用';
+      update();
+      return;
+    }
     if (sourceMode == 'files' && selectedFiles.isEmpty) {
       error = '请先添加文件或选择资料目录';
       update();
@@ -424,6 +452,96 @@ class AgentController extends ChangeNotifier {
       return {'ok': false, 'summary': '连接测试超时，请检查网络与地址'};
     } finally {
       _requests.remove(id);
+    }
+  }
+
+  void _localModels(Json payload) {
+    localModels = _maps(payload['models']);
+    localModelState = Map<String, dynamic>.from(payload['state'] as Map? ?? {});
+    localRuntimeAvailable = payload['runtimeAvailable'] == true;
+  }
+
+  Future<Json> _modelCommand(
+    String type, {
+    String? path,
+    String? modelId,
+  }) async {
+    if (!connected) throw StateError('本地执行服务尚未连接');
+    final id = 'model-${DateTime.now().microsecondsSinceEpoch}';
+    final completer = Completer<Json>();
+    _requests[id] = completer;
+    send({'type': type, 'requestId': id, 'path': ?path, 'modelId': ?modelId});
+    try {
+      final response = await completer.future.timeout(
+        const Duration(seconds: 200),
+      );
+      if (response['ok'] != true) {
+        throw StateError(response['summary'] as String? ?? '模型操作失败');
+      }
+      return response;
+    } finally {
+      _requests.remove(id);
+    }
+  }
+
+  Future<void> importLocalModel(String path) async {
+    if (busy || localModelOperation) return;
+    localModelOperation = true;
+    update();
+    try {
+      final response = await _modelCommand('local.import', path: path);
+      final model = Map<String, dynamic>.from(response['model'] as Map);
+      await _loadLocalModel(model['id'] as String);
+    } finally {
+      localModelOperation = false;
+      update();
+    }
+  }
+
+  Future<void> _loadLocalModel(String id) async {
+    final response = await _modelCommand('local.load', modelId: id);
+    await saveConnection(Map<String, dynamic>.from(response['profile'] as Map));
+  }
+
+  Future<void> loadLocalModel(String id) async {
+    if (busy || localModelOperation) return;
+    localModelOperation = true;
+    update();
+    try {
+      await _loadLocalModel(id);
+    } finally {
+      localModelOperation = false;
+      update();
+    }
+  }
+
+  Future<void> stopLocalModel() async {
+    if (busy) return;
+    final ownOperation = !localModelOperation;
+    if (ownOperation) {
+      localModelOperation = true;
+      update();
+    }
+    try {
+      await _modelCommand('local.stop');
+    } finally {
+      if (ownOperation) {
+        localModelOperation = false;
+        update();
+      }
+    }
+  }
+
+  Future<void> removeLocalModel(String id) async {
+    if (busy || localModelOperation) return;
+    localModelOperation = true;
+    update();
+    try {
+      await _modelCommand('local.remove', modelId: id);
+      await deleteConnection('gguf-$id');
+    } finally {
+      localModelOperation = false;
+      update();
     }
   }
 

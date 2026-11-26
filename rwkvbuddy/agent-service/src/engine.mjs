@@ -106,7 +106,7 @@ export class AgentRun {
     this.seq = 0;
     this.modelPool = new Pool(command.config?.inferenceMode === 'local'
       ? 1 : Math.max(1, Math.min(3, Number(command.config?.concurrency) || 2)));
-    this.provider = options.provider || new Provider(command.config || {}, this.modelPool);
+    this.provider = options.provider || new Provider(command.config || {}, this.modelPool, options.nativeModels);
     this.forceJsonOutput = false;
     this.state = {
       id: this.id, question: command.question.trim(), workspace: command.workspace || '',

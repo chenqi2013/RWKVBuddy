@@ -108,6 +108,14 @@ install(FILES "${AOT_LIBRARY}" DESTINATION "${INSTALL_BUNDLE_DATA_DIR}"
   COMPONENT Runtime)
 
 # Ship the local agent service beside the Flutter executable for all build modes.
+if(CMAKE_GENERATOR_PLATFORM STREQUAL "ARM64")
+  set(LOCAL_MODEL_ARCH "arm64")
+else()
+  set(LOCAL_MODEL_ARCH "x64")
+endif()
+if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../agent-service/runtime/llama/windows-${LOCAL_MODEL_ARCH}/rwkvbuddy-inference.exe")
+  message(FATAL_ERROR "Local model runtime missing. Run: python scripts/prepare-local-rwkv.py")
+endif()
 if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../agent-service/node_modules/pdfjs-dist/package.json")
   message(FATAL_ERROR "Document dependencies missing. Run: npm ci --prefix agent-service --omit=optional --ignore-scripts")
 endif()
@@ -118,4 +126,13 @@ install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/../agent-service/"
   PATTERN ".venv" EXCLUDE
   PATTERN "__pycache__" EXCLUDE
   PATTERN "test_server.py" EXCLUDE
+  PATTERN "llama-server.exe" EXCLUDE
+  PATTERN "llama-server" EXCLUDE
+  PATTERN "server.py" EXCLUDE
+  PATTERN "native" EXCLUDE
   PATTERN ".package-lock.json" EXCLUDE)
+# Remove obsolete HTTP runtime from a previous build of this same bundle.
+install(CODE "file(REMOVE
+  \"${CMAKE_INSTALL_PREFIX}/agent-service/runtime/llama/windows-${LOCAL_MODEL_ARCH}/llama-server.exe\"
+  \"${CMAKE_INSTALL_PREFIX}/agent-service/local-model/server.py\"
+  \"${CMAKE_INSTALL_PREFIX}/agent-service/local-model/test_server.py\")" COMPONENT Runtime)

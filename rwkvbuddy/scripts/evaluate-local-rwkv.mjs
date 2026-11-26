@@ -1,36 +1,51 @@
-// Real-model contract probes. Requires a running local server; no mocked output.
+// Real-model contract probes using native GGUF or an explicitly supplied API.
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { Provider } from '../agent-service/src/provider.mjs';
 import { listModels } from '../agent-service/src/connection.mjs';
 import { Pool } from '../agent-service/src/runtime.mjs';
+import { LocalModels } from '../agent-service/src/local-model.mjs';
 import { AgentRun } from '../agent-service/src/engine.mjs';
 
 const args = process.argv.slice(2);
 if (args.includes('--help')) {
-  console.log('Usage: node scripts/evaluate-local-rwkv.mjs [http://127.0.0.1:8099/v1] [--workflow] [--api] [--json-output]');
+  console.log('Usage: node scripts/evaluate-local-rwkv.mjs [--model C:/models/model.gguf | http://host/v1 --api] [--workflow] [--json-output]');
   console.log('--api: evaluate an explicitly supplied LAN/API URL using the online connection transport');
   process.exit(0);
 }
-if (args.some((arg) => arg.startsWith('--') && !['--workflow', '--api', '--json-output'].includes(arg))) throw new Error('Unknown option');
+if (args.some((arg) => arg.startsWith('--') && !['--workflow', '--api', '--json-output', '--model'].includes(arg))) throw new Error('Unknown option');
 const api = args.includes('--api');
-const address = args.find((arg) => !arg.startsWith('--'));
+const modelIndex = args.indexOf('--model');
+const modelPath = modelIndex >= 0 ? args[modelIndex + 1] : '';
+if (modelIndex >= 0 && (!modelPath || modelPath.startsWith('--'))) throw new Error('--model requires a GGUF path');
+const address = args.find((arg, index) => !arg.startsWith('--') && (modelIndex < 0 || index !== modelIndex + 1));
+if (!api && !modelPath) throw new Error('Specify --model path.gguf for native inference, or --api with an explicit URL');
+if (api && modelPath) throw new Error('Choose --model or --api');
 if (api && !address) throw new Error('--api requires an explicit service URL');
 if (api) {
   for (const key of ['FOREMAN_PASSWORD', 'FOREMAN_MODEL', 'FOREMAN_CF_ACCESS_CLIENT_ID', 'FOREMAN_CF_ACCESS_CLIENT_SECRET']) delete process.env[key];
 }
 const evaluationRoot = resolve('build/model-evaluation', `rwkv-${Date.now()}`);
 
-const config = {
+mkdirSync(evaluationRoot, { recursive: true });
+let nativeModels;
+try {
+let config = {
   baseUrl: address || 'http://127.0.0.1:8099/v1',
   inferenceMode: api ? 'online' : 'local', protocol: 'chat', model: '', concurrency: 1, enableThinking: false,
   jsonOutput: args.includes('--json-output'),
   maxTokens: 512, temperature: 0,
 };
-const models = await listModels(config);
-if (!models.models.length) throw new Error('No loaded local model');
-config.model = models.models[0];
-const provider = new Provider(config, new Pool(1));
+if (modelPath) {
+  nativeModels = new LocalModels(evaluationRoot, () => {});
+  const model = await nativeModels.import(modelPath);
+  config = { ...await nativeModels.load(model.id), maxTokens: 512, temperature: 0 };
+} else {
+  const models = await listModels(config);
+  if (!models.models.length) throw new Error('No loaded API model');
+  config.model = models.models[0];
+}
+const provider = new Provider(config, new Pool(1), nativeModels);
 const cases = [
   { id: 'json', instruction: '仅提交 {"ok":true}。', data: {}, verify: (r) => r.ok === true },
   { id: 'facts', instruction: '提取资料中的合同号和金额，返回 {"contractId":string,"amount":number}，不增加事实。',
@@ -64,7 +79,7 @@ if (args.includes('--workflow')) {
   const run = new AgentRun({
     mode: 'rwkv', sourceMode: 'files', selectedFiles: [attachment], outputMode: 'files', config,
     question: '读取附件，先调用 calculator 计算合同总额，再生成结果.json，字段为 contractId（合同号）、amount（数字金额）、paymentDate（原文未给出时 null）。简短回答并引用资料。不要猜测缺失事实。',
-  }, join(evaluationRoot, 'runs'), () => {});
+  }, join(evaluationRoot, 'runs'), () => {}, { nativeModels });
   const timer = setTimeout(() => run.cancel(), 600000);
   const started = performance.now();
   try {
@@ -89,3 +104,5 @@ writeFileSync(file, JSON.stringify({ model: config.model, timestamp: new Date().
   scope: 'Contract probes only; not proof of document analysis quality or long-context recall', results }, null, 2));
 console.log(`Passed ${results.filter((r) => r.passed).length}/${results.length}; evidence: ${file}`);
 if (results.some((r) => !r.passed)) process.exitCode = 1;
+
+} finally { await nativeModels?.close(); }

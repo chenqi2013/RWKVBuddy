@@ -16,6 +16,7 @@ Windows / macOS 桌面文件助手。添加文件或选择资料目录，输入�
 flutter doctor -v
 flutter pub get
 npm ci --prefix agent-service --omit=optional --ignore-scripts
+python scripts/prepare-local-rwkv.py
 powershell -ExecutionPolicy Bypass -File scripts/prepare-windows-runtime.ps1
 flutter run -d windows
 ```
@@ -50,9 +51,9 @@ flutter run -d windows
 
 ## 模型服务与连续对话
 
-点击左下角“模型服务”或顶部设置按钮，选择“在线 API”或“本地模型”，新建连接。在线连接填写现有千问或其他服务地址、协议、模型和凭据；本地连接预填本机 RWKV 服务地址，无需 API Key。
+点击左下角“模型服务”或顶部设置按钮，选择“在线 API”或“本地模型”。在线连接填写现有服务地址、协议、模型和凭据；本地模型点击“导入 GGUF 并加载”，选择文件后由原生 llama.cpp 直接加载并启用模型，再点击“开始对话”。支持取消加载、卸载释放内存、移除记录。导入保留原文件路径，不复制或删除模型；重启后可从列表重新加载。
 
-本地 RWKV 改用 `rwkv7-g1l-1.5b-Q4_K_M.gguf`，通过固定版本 llama.cpp 推理，无需 PyTorch。仅支持 Windows 和 macOS：Windows 默认 CPU，macOS 默认 Metal，可切换 CPU。运行时编译、启动和连接方式见 [本地 GGUF 模型服务](docs/local-rwkv.md)。已在 Apple M4 上实际加载指定 GGUF 并验证流式生成；小型验收通过 4/6 项，多步工具调用和成果文件交付仍不稳定。
+本地推理通过标准输入输出调用随包的原生组件，不启动 HTTP 服务、不监听端口，也不做回环连接检测；无需普通用户安装 Python/PyTorch。支持兼容的 RWKV-7 GGUF 及其他文本 GGUF，Windows 默认 CPU、macOS 默认 Metal。开发环境需先准备运行时，步骤见 [本地 GGUF 模型](docs/local-rwkv.md)。Windows 已使用现有 Qwen2.5 0.5B GGUF 完成界面导入、加载、真实推理和卸载测试。RWKV `rwkv7-g1l-1.5b-Q4_K_M.gguf` 在 Apple M4 上小型验收通过 4/6 项，多步工具调用和成果文件交付仍不稳定；加载成功不代表业务准确率达标。
 
 - 可保存多个连接，编辑、切换或删除。地址接受服务根地址、`/v1`、`/v1/models` 和完整推理接口地址，并自动规范化。
 - “测试连接 / 获取模型”只验证模型列表接口；“测试生成”会真实请求一次模型并验证返回结果。支持从列表选择模型，也可手动填写。
@@ -67,7 +68,7 @@ flutter run -d windows
 
 ## 在线 API、本地模型与演示
 
-“在线 API”使用已有千问或其他 HTTP 模型服务；“本地模型”使用在此电脑运行的 RWKV 服务，两者复用相同的文件处理、工具调用和过程记录。切换连接只影响后续任务。本地模型仅允许回环地址，不继承在线密钥、不自动回退到在线服务。当前本地推理串行执行。
+“在线 API”使用已有千问或其他 HTTP 模型服务；“本地模型”由原生组件直接读取此电脑上的 GGUF，两者复用相同的文件处理、工具调用和过程记录。切换连接只影响后续任务。导入的 GGUF 不使用 HTTP 地址或在线密钥，也不自动回退到在线服务。当前本地推理串行执行。
 
 “本地演示”模式无需模型服务，使用固定规则读取资料、调用 Lua 核算台账并产出带来源的报告。此模式用于离线分析和验证流程，界面与报告会明确标注未调用模型；它不会按任意自然语言指令生成开放式分析。
 
@@ -117,6 +118,7 @@ flutter analyze --no-pub
 flutter test --no-pub
 node --test agent-service/test/*.test.mjs
 flutter test integration_test/desktop_flow_test.dart -d windows --no-pub
+flutter test integration_test/gguf_import_test.dart -d windows --no-pub --dart-define=GGUF_TEST_PATH=C:/models/model.gguf
 flutter build windows --release --no-pub
 ```
 

@@ -8,6 +8,7 @@ import 'package:flutter/services.dart';
 import 'agent_controller.dart';
 import 'connection_settings.dart';
 import 'trace_view.dart';
+import 'windows_text_editing.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
 
 const ink = Color(0xFF252525);
@@ -948,22 +949,25 @@ class _WorkspacePageState extends State<WorkspacePage>
                       },
                     ),
                   },
-                  child: TextField(
+                  child: WindowsTextEditing(
                     controller: prompt,
-                    focusNode: promptFocus,
-                    enabled: true,
-                    minLines: home ? 3 : 1,
-                    maxLines: home ? 5 : 3,
-                    style: const TextStyle(fontSize: 14, height: 1.8),
-                    decoration: InputDecoration(
-                      hintText: home
-                          ? '今天帮你做些什么？添加文件，或直接说说你的想法…'
-                          : '继续提问，或告诉我需要怎样修改…',
-                      filled: false,
-                      border: InputBorder.none,
-                      enabledBorder: InputBorder.none,
-                      focusedBorder: InputBorder.none,
-                      contentPadding: const EdgeInsets.symmetric(vertical: 8),
+                    child: TextField(
+                      controller: prompt,
+                      focusNode: promptFocus,
+                      enabled: true,
+                      minLines: home ? 3 : 1,
+                      maxLines: home ? 5 : 3,
+                      style: const TextStyle(fontSize: 14, height: 1.8),
+                      decoration: InputDecoration(
+                        hintText: home
+                            ? '今天帮你做些什么？添加文件，或直接说说你的想法…'
+                            : '继续提问，或告诉我需要怎样修改…',
+                        filled: false,
+                        border: InputBorder.none,
+                        enabledBorder: InputBorder.none,
+                        focusedBorder: InputBorder.none,
+                        contentPadding: const EdgeInsets.symmetric(vertical: 8),
+                      ),
                     ),
                   ),
                 ),

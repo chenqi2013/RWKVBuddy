@@ -9,6 +9,7 @@ import { Provider } from './src/provider.mjs';
 import { Pool } from './src/runtime.mjs';
 import { defaultConnection } from './src/defaults.mjs';
 import { promptWorkspace } from './src/project-workspace.mjs';
+import { LocalModels } from './src/local-model.mjs';
 
 const legacyMacRoot = join(homedir(), '.local', 'share', 'RWKVBuddy', 'runs');
 const dataRoot = process.env.RWKVBUDDY_DATA_DIR || (process.platform === 'darwin' && existsSync(legacyMacRoot) ? legacyMacRoot :
@@ -29,6 +30,7 @@ let active;
 let activePromise;
 let shuttingDown = false;
 const send = (event) => { if (!process.stdout.destroyed) process.stdout.write(`${JSON.stringify(event)}\n`); };
+const localModels = new LocalModels(dataRoot, payload => send({ type: 'local.models', payload }));
 const savedRun = (id) => {
   if (typeof id !== 'string' || !/^[a-f0-9-]{36}$/.test(id)) throw new Error('无效任务 ID');
   const state = JSON.parse(readFileSync(join(dataRoot, id, 'run.json'), 'utf8'));
@@ -51,6 +53,27 @@ function processCommand(command) {
   if (shuttingDown) return;
   try {
     switch (command.type) {
+      case 'local.list': localModels.publish(); break;
+      case 'local.import':
+      case 'local.load':
+      case 'local.stop':
+      case 'local.remove': {
+        void (async () => {
+          try {
+            if (active && command.type !== 'local.import') throw new Error('请先停止当前任务，再切换或卸载模型');
+            let model;
+            let profile;
+            if (command.type === 'local.import') model = await localModels.import(command.path);
+            if (command.type === 'local.load') profile = await localModels.load(command.modelId);
+            if (command.type === 'local.stop') await localModels.stop();
+            if (command.type === 'local.remove') await localModels.remove(command.modelId);
+            send({ type: 'local.result', payload: { requestId: command.requestId, ok: true, model, profile } });
+          } catch (error) {
+            send({ type: 'local.result', payload: { requestId: command.requestId, ok: false, summary: error.message } });
+          }
+        })();
+        break;
+      }
       case 'history': send({ type: 'history', payload: { runs: history() } }); break;
       case 'run.pin': {
         savedRun(command.runId);
@@ -90,15 +113,19 @@ function processCommand(command) {
         void (async () => {
           try {
             const start = Date.now();
+            localModels.assertReady(command.config);
             if (command.generate) {
-              const provider = new Provider({ ...command.config, maxTokens: 256 }, new Pool(1));
+              const provider = new Provider({ ...command.config, maxTokens: 256 }, new Pool(1), localModels);
               const answer = await provider.generate('连接测试。仅返回 {"ok":true}。', {},
                 AbortSignal.timeout(command.config?.inferenceMode === 'local' ? 120000 : 20000));
               if (answer.ok !== true) throw new Error('服务已响应，但生成测试未返回预期的 JSON');
               send({ type: 'connection.result', payload: { requestId: id, ok: true, generation: true,
                 latencyMs: Date.now() - start, summary: '生成测试通过，服务已返回有效回答' } });
             } else {
-              send({ type: 'connection.result', payload: { requestId: id, ok: true, ...await listModels(command.config) } });
+              const result = command.config?.localModelId
+                ? { models: [command.config.model], summary: '本地原生模型已就绪' }
+                : await listModels(command.config);
+              send({ type: 'connection.result', payload: { requestId: id, ok: true, ...result } });
             }
           } catch (error) { send({ type: 'connection.result', payload: { requestId: id, ok: false, summary: error.message } }); }
         })();
@@ -140,8 +167,11 @@ function processCommand(command) {
               command.selectedFiles.some((path) => typeof path !== 'string' || !path.trim() || path.length > 32767)) throw new Error('请选择 1–20 个有效文件');
         } else if (command.sourceMode !== 'text' && (typeof command.workspace !== 'string' || !command.workspace.trim())) throw new Error('请选择工作目录');
         if (!['local', 'rwkv'].includes(command.mode)) throw new Error('请选择有效执行模式');
-        if (command.mode === 'rwkv') connection(command.config);
-        active = new AgentRun({ ...command, workspace: ['files', 'text'].includes(command.sourceMode) ? '' : resolve(command.workspace) }, dataRoot, send);
+        if (command.mode === 'rwkv') {
+          if (!command.config?.localModelId) connection(command.config);
+          localModels.assertReady(command.config);
+        }
+        active = new AgentRun({ ...command, workspace: ['files', 'text'].includes(command.sourceMode) ? '' : resolve(command.workspace) }, dataRoot, send, { nativeModels: localModels });
         activePromise = active.execute().catch(() => send({ type: 'service.error', payload: { message: '运行记录写入失败，请检查用户数据目录权限' } })).finally(() => {
           active = null; activePromise = null;
           send({ type: 'history', payload: { runs: history() } });
@@ -195,6 +225,7 @@ async function shutdown() {
   shuttingDown = true;
   active?.cancel();
   if (activePromise) await activePromise;
+  await localModels.close();
   process.exitCode = 0;
   input.close();
   process.stdin.destroy();
@@ -215,4 +246,5 @@ send({ type: 'service.ready', payload: {
   model: process.env.FOREMAN_MODEL || defaultConnection.model,
   defaultConnection, hasEnvironmentCredentials: Boolean(process.env.FOREMAN_PASSWORD),
   runs: history(),
+  localModels: localModels.snapshot(),
 } });

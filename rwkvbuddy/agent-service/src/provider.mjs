@@ -1,9 +1,10 @@
 import { checkAbort } from './runtime.mjs';
 import { connection, listModels } from './connection.mjs';
 import { GenerationMetrics } from './generation-metrics.mjs';
+import { loopbackFetch } from './loopback-http.mjs';
 
 export class Provider {
-  constructor(config, pool) { this.config = config; this.pool = pool; }
+  constructor(config, pool, nativeModels) { this.config = config; this.pool = pool; this.nativeModels = nativeModels; }
   async resolveModel(signal) {
     const specified = this.config.model?.trim() || (this.config.inferenceMode !== 'local' && process.env.FOREMAN_MODEL);
     if (specified) return specified;
@@ -19,7 +20,9 @@ export class Provider {
     return this.pool.use(async () => {
       checkAbort(signal);
       const config = this.config;
-      const target = connection(config);
+      const native = Boolean(config.localModelId) || config.protocol === 'native';
+      if (native && (!this.nativeModels || !config.localModelId)) throw new Error('请先加载本地 GGUF 模型');
+      const target = native ? { protocol: 'chat', headers: {}, apiKey: '' } : connection(config);
       const mode = target.protocol;
       const headers = target.headers;
       const password = target.apiKey;
@@ -53,30 +56,32 @@ export class Provider {
         return Object.assign(new Error(`模型请求超过 ${timeoutMs / 1000} 秒，未完成响应；请检查服务状态和 JSON 输出模式，已停止本次请求。`), { code: 'MODEL_TIMEOUT' });
       };
       let response;
-      try {
-        onDelta(0, '', { phase: 'requesting' });
-        response = await fetch(target.endpoint, {
-          method: 'POST', headers, body: JSON.stringify(body), signal: requestSignal,
-          redirect: config.inferenceMode === 'local' ? 'error' : 'follow',
-        });
-      } catch (error) {
-        if (signal.aborted) throw error;
-        if (requestSignal.aborted) throw requestError(error);
-        throw new Error(config.inferenceMode === 'local'
-          ? '本地模型服务连接失败或超过 600 秒，请确认服务已启动、模型已加载。'
-          : '模型服务连接失败或超过 120 秒，请检查服务地址和网络。');
-      }
-      if (!response.ok) {
-        await response.body?.cancel();
-        if (mode === 'chat' && jsonOutput && [400, 422].includes(response.status)) {
-          throw new Error(`模型服务 HTTP ${response.status}：请检查服务是否支持 JSON 输出模式（response_format），以及模型名称、参数和上下文上限。`);
+      if (!native) {
+        try {
+          onDelta(0, '', { phase: 'requesting' });
+          response = await (config.inferenceMode === 'local' ? loopbackFetch : fetch)(target.endpoint, {
+            method: 'POST', headers, body: JSON.stringify(body), signal: requestSignal,
+            redirect: config.inferenceMode === 'local' ? 'error' : 'follow',
+          });
+        } catch (error) {
+          if (signal.aborted) throw error;
+          if (requestSignal.aborted) throw requestError(error);
+          throw new Error(config.inferenceMode === 'local'
+            ? '本地模型服务连接失败或超过 600 秒，请确认服务已启动、模型已加载。'
+            : '模型服务连接失败或超过 120 秒，请检查服务地址和网络。');
         }
-        if (config.inferenceMode === 'local') {
-          throw new Error(response.status === 429
-            ? '本地模型正在处理请求，请等待或停止其他任务后重试。'
-            : `本地模型 HTTP ${response.status}：请检查模型名称、请求参数及输入加输出 Token 是否超过服务的 --context-limit（llama.cpp 的 --ctx-size）。`);
+        if (!response.ok) {
+          await response.body?.cancel();
+          if (mode === 'chat' && jsonOutput && [400, 422].includes(response.status)) {
+            throw new Error(`模型服务 HTTP ${response.status}：请检查服务是否支持 JSON 输出模式（response_format），以及模型名称、参数和上下文上限。`);
+          }
+          if (config.inferenceMode === 'local') {
+            throw new Error(response.status === 429
+              ? '本地模型正在处理请求，请等待或停止其他任务后重试。'
+              : `本地模型 HTTP ${response.status}：请检查模型名称、请求参数及输入加输出 Token 是否超过服务的 --context-limit（llama.cpp 的 --ctx-size）。`);
+          }
+          throw new Error(`模型服务 HTTP ${response.status}，请检查服务协议、模型和凭据。`);
         }
-        throw new Error(`模型服务 HTTP ${response.status}，请检查服务协议、模型和凭据。`);
       }
       let text = '';
       let finishReason = '';
@@ -104,7 +109,10 @@ export class Provider {
         }
       };
       try {
-        if (response.headers.get('content-type')?.includes('application/json')) {
+        if (native) {
+          onDelta(0, '', { phase: 'requesting' });
+          await this.nativeModels.generate(config, body, requestSignal, chunk => consume(JSON.stringify(chunk)));
+        } else if (response.headers.get('content-type')?.includes('application/json')) {
           consume(await response.text());
         } else {
           if (!response.body) throw new Error('模型服务未返回内容');

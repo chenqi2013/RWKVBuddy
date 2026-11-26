@@ -1,4 +1,5 @@
 import { defaultConnection } from './defaults.mjs';
+import { loopbackFetch } from './loopback-http.mjs';
 
 export function connection(config = {}) {
   const local = config.inferenceMode === 'local';
@@ -36,7 +37,7 @@ export async function listModels(config, signal) {
   const start = Date.now();
   let response;
   try {
-    response = await fetch(`${target.baseUrl}/models`, { headers: target.headers,
+    response = await (config.inferenceMode === 'local' ? loopbackFetch : fetch)(`${target.baseUrl}/models`, { headers: target.headers,
       redirect: config.inferenceMode === 'local' ? 'error' : 'follow',
       signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(15000)]) : AbortSignal.timeout(15000) });
   } catch { throw new Error('连接失败或超过 15 秒，请检查地址、网络和代理配置'); }
