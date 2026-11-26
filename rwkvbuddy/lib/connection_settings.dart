@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'agent_controller.dart';
 import 'windows_text_editing.dart';
+import 'local_model_panel.dart';
 
 class ConnectionSettings extends StatefulWidget {
   const ConnectionSettings({super.key, required this.agent});
@@ -244,28 +245,25 @@ class _ConnectionSettingsState extends State<ConnectionSettings> {
           setState(() => sourceFilter = value.single),
     ),
     const SizedBox(height: 20),
-    if (sourceFilter == 'local')
-      const Padding(
-        padding: EdgeInsets.only(bottom: 16),
-        child: Text(
-          '本地模型在此电脑推理，资料仅发送到回环地址。支持 Windows 和 macOS，使用 llama.cpp 加载 RWKV-7 GGUF（默认端口 8099）。请先启动服务再测试生成；本地演示仅运行固定规则。',
-        ),
-      ),
+    if (sourceFilter == 'local') LocalModelPanel(agent: widget.agent),
     Row(
       children: [
         const Expanded(
           child: Text('选择用于下一轮任务的模型服务', style: TextStyle(color: Colors.grey)),
         ),
-        FilledButton.icon(
-          onPressed: widget.agent.busy ? null : () => edit(null),
-          icon: const Icon(Icons.add),
-          label: const Text('新建连接'),
-        ),
+        if (sourceFilter == 'online')
+          FilledButton.icon(
+            onPressed: widget.agent.busy ? null : () => edit(null),
+            icon: const Icon(Icons.add),
+            label: const Text('新建连接'),
+          ),
       ],
     ),
     const SizedBox(height: 24),
     for (final profile in widget.agent.connections.where(
-      (profile) => (profile['inferenceMode'] ?? 'online') == sourceFilter,
+      (profile) =>
+          (profile['inferenceMode'] ?? 'online') == sourceFilter &&
+          profile['localModelId'] == null,
     ))
       Card(
         margin: const EdgeInsets.only(bottom: 12),
@@ -367,9 +365,10 @@ class _ConnectionSettingsState extends State<ConnectionSettings> {
           ),
         ),
       ),
-    if (!widget.agent.connections.any(
-      (profile) => (profile['inferenceMode'] ?? 'online') == sourceFilter,
-    ))
+    if (sourceFilter == 'online' &&
+        !widget.agent.connections.any(
+          (profile) => (profile['inferenceMode'] ?? 'online') == sourceFilter,
+        ))
       const Padding(
         padding: EdgeInsets.symmetric(vertical: 36),
         child: Text('尚未添加此类模型服务，点击“新建连接”配置。'),
@@ -410,9 +409,10 @@ class _ConnectionSettingsState extends State<ConnectionSettings> {
     DropdownButtonFormField<String>(
       value: inferenceMode,
       decoration: const InputDecoration(labelText: '运行模式'),
-      items: const [
-        DropdownMenuItem(value: 'online', child: Text('在线 API')),
-        DropdownMenuItem(value: 'local', child: Text('本地模型')),
+      items: [
+        const DropdownMenuItem(value: 'online', child: Text('在线 API')),
+        if (inferenceMode == 'local')
+          const DropdownMenuItem(value: 'local', child: Text('本机 API（旧连接）')),
       ],
       onChanged: testing || saving
           ? null
