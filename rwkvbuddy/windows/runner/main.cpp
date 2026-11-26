@@ -17,7 +17,7 @@ HANDLE CreateAgentProcessJob() {
                                  &limits, sizeof(limits)) ||
       !::AssignProcessToJobObject(job, ::GetCurrentProcess())) {
     ::CloseHandle(job);
-    ::OutputDebugStringW(L"RWKVBuddy: process job unavailable; graceful shutdown remains enabled.\n");
+    ::OutputDebugStringW(L"TECNO Buddy: process job unavailable; graceful shutdown remains enabled.\n");
     return nullptr;
   }
   return job;
@@ -50,7 +50,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
   FlutterWindow window(project);
   Win32Window::Point origin(10, 10);
   Win32Window::Size size(1280, 720);
-  if (!window.Create(L"RWKVBuddy", origin, size)) {
+  if (!window.Create(L"TECNO Buddy", origin, size)) {
     return EXIT_FAILURE;
   }
   window.SetQuitOnClose(true);

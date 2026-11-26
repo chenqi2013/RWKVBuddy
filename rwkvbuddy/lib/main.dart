@@ -37,7 +37,7 @@ class MyApp extends StatelessWidget {
   final AgentController? controller;
   @override
   Widget build(BuildContext context) => MaterialApp(
-    title: 'RWKVBuddy · 文件助手',
+    title: 'TECNO Buddy · 文件助手',
     debugShowCheckedModeBanner: false,
     theme: ThemeData(
       useMaterial3: true,
@@ -304,7 +304,7 @@ class _WorkspacePageState extends State<WorkspacePage>
 
   Future<void> exportReport() async {
     final location = await getSaveLocation(
-      suggestedName: 'RWKVBuddy-分析报告.md',
+      suggestedName: 'TECNO Buddy-分析报告.md',
       acceptedTypeGroups: const [
         XTypeGroup(label: 'Markdown 报告', extensions: ['md']),
       ],
@@ -391,7 +391,7 @@ class _WorkspacePageState extends State<WorkspacePage>
             children: [
               const Expanded(
                 child: Text(
-                  'RWKVBuddy',
+                  'TECNO Buddy',
                   style: TextStyle(
                     fontSize: 16,
                     fontWeight: FontWeight.w700,
@@ -756,7 +756,7 @@ class _WorkspacePageState extends State<WorkspacePage>
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
                         Text(
-                          'RWKVBuddy，我帮你',
+                          'TECNO Buddy，我帮你',
                           textAlign: TextAlign.center,
                           style: TextStyle(
                             fontSize: compact ? 27 : 32,
@@ -1215,7 +1215,7 @@ class _WorkspacePageState extends State<WorkspacePage>
                   ),
                   SizedBox(width: 8),
                   Text(
-                    'RWKVBuddy',
+                    'TECNO Buddy',
                     style: TextStyle(fontWeight: FontWeight.w600),
                   ),
                 ],
@@ -1378,7 +1378,7 @@ class _WorkspacePageState extends State<WorkspacePage>
 
   Future<void> exportTrace() async {
     final location = await getSaveLocation(
-      suggestedName: 'RWKVBuddy-执行轨迹.json',
+      suggestedName: 'TECNO Buddy-执行轨迹.json',
       acceptedTypeGroups: const [
         XTypeGroup(label: '执行轨迹 JSON', extensions: ['json']),
       ],

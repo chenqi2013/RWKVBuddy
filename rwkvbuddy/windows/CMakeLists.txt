@@ -4,7 +4,7 @@ project(rwkvbuddy LANGUAGES CXX)
 
 # The name of the executable created for the application. Change this to change
 # the on-disk name of your application.
-set(BINARY_NAME "rwkvbuddy")
+set(BINARY_NAME "tecno_buddy")
 
 # Explicitly opt in to modern CMake behaviors to avoid warnings with recent
 # versions of CMake.
