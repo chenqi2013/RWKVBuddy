@@ -129,6 +129,30 @@ void main() {
       await tester.tap(find.text('@研发'));
       await tester.pumpAndSettle();
       expect(find.text('@研发 '), findsOneWidget);
+      final input = find.byType(TextField);
+      await tester.enterText(input, '@研发 请分析本地文件');
+      await tester.tap(find.byTooltip('@成员'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('@文案'));
+      await tester.pumpAndSettle();
+      final controller = tester.widget<TextField>(input).controller!;
+      expect(controller.text, '@研发 请分析本地文件 @文案 ');
+      // Mentions remain normal editable text and can be removed manually.
+      controller.selection = const TextSelection(
+        baseOffset: 0,
+        extentOffset: 4,
+      );
+      await tester.sendKeyEvent(LogicalKeyboardKey.backspace);
+      await tester.pump();
+      expect(controller.text, '请分析本地文件 @文案 ');
+      controller.selection = TextSelection.collapsed(
+        offset: controller.text.length,
+      );
+      await tester.tap(find.byTooltip('@成员'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('@主持人'));
+      await tester.pumpAndSettle();
+      expect(controller.text, '请分析本地文件 @文案 @主持人 ');
       expect(tester.takeException(), isNull);
     },
   );

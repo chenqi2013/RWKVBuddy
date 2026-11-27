@@ -1008,10 +1008,22 @@ class _WorkspacePageState extends State<WorkspacePage>
           TeamControls(
             agent: agent,
             onMention: (name) {
-              prompt.text =
-                  '@$name ${prompt.text.replaceFirst(RegExp(r"^@[^ ]+ ?"), "")}';
-              prompt.selection = TextSelection.collapsed(
-                offset: prompt.text.length,
+              final text = prompt.text;
+              final offset = prompt.selection.isValid
+                  ? prompt.selection.extentOffset
+                  : text.length;
+              final before = text.substring(0, offset);
+              final after = text.substring(offset);
+              final separator =
+                  before.isNotEmpty && !RegExp(r'\s$').hasMatch(before)
+                  ? ' '
+                  : '';
+              final insertion = '$separator@$name ';
+              prompt.value = TextEditingValue(
+                text: '$before$insertion$after',
+                selection: TextSelection.collapsed(
+                  offset: offset + insertion.length,
+                ),
               );
               promptFocus.requestFocus();
             },
