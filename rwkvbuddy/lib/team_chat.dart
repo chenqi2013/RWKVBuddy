@@ -280,20 +280,33 @@ class TeamConversation extends StatelessWidget {
                         ),
                       if (running) ...[
                         if (draft.isNotEmpty) const SizedBox(height: 10),
-                        Text(
-                          latest['progress'] as String? ?? '正在分析，等待模型返回…',
-                          style: const TextStyle(
-                            fontSize: 12,
-                            color: Colors.grey,
-                          ),
+                        Row(
+                          children: [
+                            SizedBox(
+                              width: 14,
+                              height: 14,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 1.6,
+                                color: color,
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                latest['progress'] as String? ?? '正在分析，等待模型返回…',
+                                style: const TextStyle(
+                                  fontSize: 12,
+                                  color: Colors.grey,
+                                ),
+                              ),
+                            ),
+                          ],
                         ),
                         if (draft.isNotEmpty)
                           const Text(
                             '生成中，尚未提交',
                             style: TextStyle(fontSize: 11, color: Colors.grey),
                           ),
-                        const SizedBox(height: 8),
-                        const LinearProgressIndicator(minHeight: 1),
                       ],
                       if (message['error'] != null)
                         Text(

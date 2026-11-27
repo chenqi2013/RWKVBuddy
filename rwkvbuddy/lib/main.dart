@@ -1295,6 +1295,17 @@ class _WorkspacePageState extends State<WorkspacePage>
             ),
             const SizedBox(width: 8),
           ],
+          if (agent.busy) ...[
+            const SizedBox(
+              width: 16,
+              height: 16,
+              child: CircularProgressIndicator(
+                strokeWidth: 1.8,
+                color: Color(0xFF96A69A),
+              ),
+            ),
+            const SizedBox(width: 8),
+          ],
           _tag(
             statusLabel(agent.run!['status'] as String?),
             _statusColor(agent.run!['status'] as String?),
@@ -1309,15 +1320,6 @@ class _WorkspacePageState extends State<WorkspacePage>
           ),
         ],
       ),
-      if (agent.busy)
-        const Padding(
-          padding: EdgeInsets.only(top: 10),
-          child: LinearProgressIndicator(
-            minHeight: 1,
-            color: Color(0xFF96A69A),
-            backgroundColor: surface,
-          ),
-        ),
       const SizedBox(height: 10),
       Expanded(
         child: NotificationListener<ScrollMetricsNotification>(

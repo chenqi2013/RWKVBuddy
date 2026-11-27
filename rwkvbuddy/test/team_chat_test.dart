@@ -213,7 +213,7 @@ void main() {
       agent.update();
       await tester.pumpAndSettle();
       expect(find.text('主持人 · 已中断'), findsOneWidget);
-      expect(find.byType(LinearProgressIndicator), findsNothing);
+      expect(find.byType(CircularProgressIndicator), findsNothing);
       expect(tester.takeException(), isNull);
     });
   }
