@@ -220,19 +220,67 @@ void main() {
   testWidgets(
     'sidebar separates task and group modes and opens settings in a centered dialog',
     (tester) async {
+      final originalDisableShadows = debugDisableShadows;
+      debugDisableShadows = false;
+      addTearDown(() => debugDisableShadows = originalDisableShadows);
       final agent = AgentController(autoConnect: false)..groupChat = true;
       addTearDown(agent.dispose);
       tester.view.physicalSize = const Size(1280, 900);
       tester.view.devicePixelRatio = 1;
       addTearDown(tester.view.resetPhysicalSize);
       addTearDown(tester.view.resetDevicePixelRatio);
-      await tester.pumpWidget(MyApp(controller: agent));
+      agent.history = [
+        {
+          'id': 'recent-contract',
+          'question': '分析合同与预算差异',
+          'createdAt': DateTime.now().toIso8601String(),
+        },
+        {
+          'id': 'recent-table',
+          'question': '汇总销售数据',
+          'createdAt': DateTime.now()
+              .subtract(const Duration(days: 1))
+              .toIso8601String(),
+        },
+      ];
+      agent.connections = [
+        {
+          'id': 'qwen',
+          'name': '千问 · 服务器',
+          'model': 'Qwen',
+          'protocol': 'chat',
+          'baseUrl': 'https://example.org/v1',
+        },
+      ];
+      final capture = GlobalKey();
+      await tester.pumpWidget(
+        RepaintBoundary(
+          key: capture,
+          child: MyApp(controller: agent),
+        ),
+      );
+      Future<void> captureView(String name) async {
+        await tester.runAsync(() async {
+          final boundary =
+              capture.currentContext!.findRenderObject()!
+                  as RenderRepaintBoundary;
+          final picture = await boundary.toImage(pixelRatio: 1);
+          final bytes = await picture.toByteData(
+            format: ui.ImageByteFormat.png,
+          );
+          final output = File('build/ui-screenshots/$name.png');
+          await output.parent.create(recursive: true);
+          await output.writeAsBytes(bytes!.buffer.asUint8List());
+          picture.dispose();
+        });
+      }
+
       expect(find.text('单助手'), findsNothing);
       expect(find.text('专家团群聊'), findsNothing);
       expect(find.byTooltip('@成员'), findsOneWidget);
       expect(
         tester.getCenter(find.text('新建任务')).dy,
-        tester.getCenter(find.text('新建群聊')).dy,
+        lessThan(tester.getCenter(find.text('新建群聊')).dy),
       );
       expect(find.byTooltip('模型服务设置'), findsNothing);
       await tester.tap(find.text('新建任务'));
@@ -241,6 +289,7 @@ void main() {
       expect(find.byTooltip('@成员'), findsNothing);
       expect(find.byKey(const Key('group-add-files')), findsNothing);
       expect(find.text('创作与研发团队 · 5人'), findsNothing);
+      await captureView('homepage-refined');
       await tester.tap(find.byTooltip('模型服务'));
       await tester.pumpAndSettle();
       final dialog = find.byKey(const Key('settings-dialog'));
@@ -249,11 +298,31 @@ void main() {
         tester.getSize(find.byKey(const Key('settings-panel'))).width,
         800,
       );
+      await captureView('model-settings-refined');
       expect(find.byTooltip('关闭设置'), findsOneWidget);
       await tester.tap(find.byTooltip('关闭设置'));
       await tester.pumpAndSettle();
       expect(dialog, findsNothing);
       expect(agent.groupChat, isFalse);
+      agent.run = {
+        'id': 'recent-contract',
+        'question': '分析合同与预算差异',
+        'status': 'completed',
+        'answer': '合同与预算资料已完成分析。',
+      };
+      agent.update();
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.byKey(const ValueKey('history-more-recent-contract')),
+      );
+      await tester.pumpAndSettle();
+      await captureView('history-menu-refined');
+      await tester.tap(find.text('删除'));
+      await tester.pumpAndSettle();
+      await captureView('history-confirmation-refined');
+      await tester.tap(find.text('取消'));
+      await tester.pumpAndSettle();
+      debugDisableShadows = originalDisableShadows;
       expect(tester.takeException(), isNull);
     },
   );

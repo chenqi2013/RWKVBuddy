@@ -41,13 +41,25 @@ class TeamControls extends StatelessWidget {
           onSelected: onMention,
           icon: const Icon(Icons.alternate_email, size: 19),
           itemBuilder: (_) => [
-            const PopupMenuItem(value: '全体', child: Text('@全体')),
+            const PopupMenuItem(
+              height: 36,
+              padding: EdgeInsets.symmetric(horizontal: 12),
+              value: '全体',
+              child: Text('@全体'),
+            ),
             for (final member in agent.team['members'] as List)
               PopupMenuItem(
+                height: 36,
+                padding: const EdgeInsets.symmetric(horizontal: 12),
                 value: member['name'] as String,
                 child: Text('@${member['name']}'),
               ),
-            const PopupMenuItem(value: '主持人', child: Text('@主持人')),
+            const PopupMenuItem(
+              height: 36,
+              padding: EdgeInsets.symmetric(horizontal: 12),
+              value: '主持人',
+              child: Text('@主持人'),
+            ),
           ],
         ),
       ],

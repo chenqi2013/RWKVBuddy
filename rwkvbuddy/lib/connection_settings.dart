@@ -206,45 +206,152 @@ class _ConnectionSettingsState extends State<ConnectionSettings> {
   }
 
   @override
-  Widget build(BuildContext context) => Scaffold(
-    backgroundColor: Colors.white,
-    appBar: AppBar(
-      automaticallyImplyLeading: widget.onClose == null,
-      actions: [
-        if (widget.onClose != null)
-          IconButton(
-            tooltip: '关闭设置',
-            onPressed: widget.onClose,
-            icon: const Icon(Icons.close_rounded, size: 20),
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Theme(
+      data: theme.copyWith(
+        colorScheme: theme.colorScheme.copyWith(
+          primary: const Color(0xFF252525),
+          onPrimary: Colors.white,
+          secondary: const Color(0xFF252525),
+          onSecondary: Colors.white,
+          primaryContainer: const Color(0xFFEEEEEE),
+          onPrimaryContainer: const Color(0xFF252525),
+          secondaryContainer: const Color(0xFFEEEEEE),
+          onSecondaryContainer: const Color(0xFF252525),
+          surface: Colors.white,
+          surfaceTint: Colors.transparent,
+          outline: const Color(0xFFE5E5E5),
+        ),
+        cardTheme: CardThemeData(
+          color: Colors.white,
+          surfaceTintColor: Colors.transparent,
+          elevation: 0,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(14),
+            side: const BorderSide(color: Color(0xFFE8E8E8)),
           ),
-      ],
-      title: Text(
-        editing == null
-            ? '模型服务'
-            : editing!.isEmpty
-            ? '新建连接'
-            : '编辑连接',
+        ),
+        inputDecorationTheme: theme.inputDecorationTheme.copyWith(
+          fillColor: const Color(0xFFFAFAFA),
+          filled: true,
+          contentPadding: const EdgeInsets.symmetric(
+            horizontal: 14,
+            vertical: 14,
+          ),
+        ),
+        chipTheme: theme.chipTheme.copyWith(
+          backgroundColor: const Color(0xFFF2F2F2),
+          surfaceTintColor: Colors.transparent,
+        ),
+        switchTheme: SwitchThemeData(
+          thumbColor: const WidgetStatePropertyAll(Colors.white),
+          trackColor: WidgetStateProperty.resolveWith(
+            (states) => states.contains(WidgetState.selected)
+                ? const Color(0xFF353535)
+                : const Color(0xFFDADADA),
+          ),
+          trackOutlineColor: const WidgetStatePropertyAll(Colors.transparent),
+        ),
+        dividerTheme: const DividerThemeData(
+          color: Color(0xFFE8E8E8),
+          thickness: 1,
+        ),
       ),
-    ),
-    body: AnimatedBuilder(
-      animation: widget.agent,
-      builder: (context, _) => Align(
-        alignment: Alignment.topCenter,
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 800),
-          child: ListView(
-            key: ValueKey(
-              editing == null ? 'list-$sourceFilter' : 'editor-$editing',
+      child: Scaffold(
+        backgroundColor: const Color(0xFFF7F7F7),
+        appBar: AppBar(
+          backgroundColor: Colors.white,
+          surfaceTintColor: Colors.transparent,
+          elevation: 0,
+          titleTextStyle: const TextStyle(
+            fontSize: 16,
+            fontWeight: FontWeight.w600,
+            color: Color(0xFF252525),
+          ),
+          bottom: const PreferredSize(
+            preferredSize: Size.fromHeight(1),
+            child: Divider(height: 1),
+          ),
+          automaticallyImplyLeading: widget.onClose == null,
+          actions: [
+            if (widget.onClose != null)
+              IconButton(
+                tooltip: '关闭设置',
+                onPressed: widget.onClose,
+                icon: const Icon(Icons.close_rounded, size: 20),
+              ),
+          ],
+          title: Text(
+            editing == null
+                ? '模型服务'
+                : editing!.isEmpty
+                ? '新建连接'
+                : '编辑连接',
+          ),
+        ),
+        body: AnimatedBuilder(
+          animation: widget.agent,
+          builder: (context, _) => Align(
+            alignment: Alignment.topCenter,
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 800),
+              child: ListView(
+                key: ValueKey(
+                  editing == null ? 'list-$sourceFilter' : 'editor-$editing',
+                ),
+                padding: const EdgeInsets.all(24),
+                children: editing == null
+                    ? _list()
+                    : [
+                        Container(
+                          padding: const EdgeInsets.all(22),
+                          decoration: BoxDecoration(
+                            color: Colors.white,
+                            borderRadius: BorderRadius.circular(14),
+                            border: Border.all(color: const Color(0xFFE8E8E8)),
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: _editor(),
+                          ),
+                        ),
+                      ],
+              ),
             ),
-            padding: const EdgeInsets.all(24),
-            children: editing == null ? _list() : _editor(),
           ),
         ),
       ),
-    ),
-  );
+    );
+  }
+
   List<Widget> _list() => [
     SegmentedButton<String>(
+      showSelectedIcon: false,
+      style: ButtonStyle(
+        backgroundColor: WidgetStateProperty.resolveWith(
+          (states) => states.contains(WidgetState.selected)
+              ? const Color(0xFF252525)
+              : Colors.white,
+        ),
+        foregroundColor: WidgetStateProperty.resolveWith(
+          (states) => states.contains(WidgetState.selected)
+              ? Colors.white
+              : const Color(0xFF727272),
+        ),
+        side: const WidgetStatePropertyAll(
+          BorderSide(color: Color(0xFFE5E5E5)),
+        ),
+        shape: WidgetStatePropertyAll(
+          RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        ),
+        padding: const WidgetStatePropertyAll(
+          EdgeInsets.symmetric(horizontal: 18, vertical: 12),
+        ),
+        textStyle: const WidgetStatePropertyAll(
+          TextStyle(fontSize: 12, fontWeight: FontWeight.w500),
+        ),
+      ),
       segments: const [
         ButtonSegment(
           value: 'online',
@@ -424,6 +531,10 @@ class _ConnectionSettingsState extends State<ConnectionSettings> {
     ),
     const SizedBox(height: 14),
     DropdownButtonFormField<String>(
+      dropdownColor: Colors.white,
+      borderRadius: BorderRadius.circular(12),
+      elevation: 4,
+      style: const TextStyle(fontSize: 13, color: Color(0xFF252525)),
       value: inferenceMode,
       decoration: const InputDecoration(labelText: '运行模式'),
       items: [
@@ -459,6 +570,10 @@ class _ConnectionSettingsState extends State<ConnectionSettings> {
     _field(name, '连接名称', hint: '例如：公司推理服务'),
     _field(address, '服务地址', hint: 'http://127.0.0.1:8000 或 https://…/v1'),
     DropdownButtonFormField<String>(
+      dropdownColor: Colors.white,
+      borderRadius: BorderRadius.circular(12),
+      elevation: 4,
+      style: const TextStyle(fontSize: 13, color: Color(0xFF252525)),
       value: protocol,
       decoration: const InputDecoration(labelText: '接口协议'),
       items: const [
@@ -543,6 +658,10 @@ class _ConnectionSettingsState extends State<ConnectionSettings> {
     _field(model, '模型名称（可选）', hint: '留空自动获取，或填写模型 ID'),
     if (models.isNotEmpty)
       DropdownButtonFormField<String>(
+        dropdownColor: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        elevation: 4,
+        style: const TextStyle(fontSize: 13, color: Color(0xFF252525)),
         value: models.contains(model.text) ? model.text : null,
         decoration: const InputDecoration(labelText: '服务返回的模型'),
         isExpanded: true,
@@ -579,6 +698,10 @@ class _ConnectionSettingsState extends State<ConnectionSettings> {
         ),
         const SizedBox(height: 16),
         DropdownButtonFormField<int>(
+          dropdownColor: Colors.white,
+          borderRadius: BorderRadius.circular(12),
+          elevation: 4,
+          style: const TextStyle(fontSize: 13, color: Color(0xFF252525)),
           value: [1024, 2048, 4096, 8192].contains(maxTokens)
               ? maxTokens
               : 4096,

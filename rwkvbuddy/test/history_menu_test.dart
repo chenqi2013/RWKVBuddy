@@ -66,6 +66,7 @@ void main() {
       await mouse.moveTo(tester.getCenter(first));
       await tester.pumpAndSettle();
       expect(menu, findsOneWidget);
+      expect(find.byKey(const ValueKey('history-date-first')), findsNothing);
       expect(tester.getTopLeft(find.text('分析合同')), initialTitlePosition);
       expect(find.byKey(const ValueKey('history-more-second')), findsNothing);
       final titlePosition = tester.getTopLeft(find.text('分析合同'));
@@ -83,6 +84,7 @@ void main() {
       agent.update();
       await tester.pumpAndSettle();
       expect(find.byIcon(Icons.push_pin_outlined), findsOneWidget);
+      expect(find.byKey(const ValueKey('history-date-first')), findsOneWidget);
       await mouse.moveTo(tester.getCenter(first));
       await tester.pumpAndSettle();
       expect(tester.getTopLeft(find.text('分析合同')), titlePosition);
@@ -151,4 +153,47 @@ void main() {
     await tester.pump(const Duration(milliseconds: 400));
     await tester.pumpWidget(const SizedBox.shrink());
   });
+
+  testWidgets(
+    'selected task replaces the right-aligned date with more even without hovering',
+    (tester) async {
+      tester.view.physicalSize = const Size(1280, 800);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      final agent = HistoryController()
+        ..history = [
+          {
+            'id': 'first',
+            'question': '分析合同',
+            'createdAt': DateTime.now().toIso8601String(),
+          },
+          {
+            'id': 'second',
+            'question': '整理数据',
+            'createdAt': DateTime.now().toIso8601String(),
+          },
+        ];
+      addTearDown(agent.dispose);
+      await tester.pumpWidget(MyApp(controller: agent));
+      final row = find.byKey(const ValueKey('history-item-first'));
+      final date = find.byKey(const ValueKey('history-date-first'));
+      final right = tester.getTopRight(date).dx;
+      expect(right, closeTo(tester.getTopRight(row).dx - 13, .1));
+      expect(find.byKey(const ValueKey('history-more-first')), findsNothing);
+      agent.run = {
+        'id': 'first',
+        'question': '分析合同',
+        'status': 'completed',
+        'answer': '已完成分析',
+      };
+      agent.update();
+      await tester.pumpAndSettle();
+      expect(date, findsNothing);
+      expect(find.byKey(const ValueKey('history-more-first')), findsOneWidget);
+      expect(find.byKey(const ValueKey('history-date-second')), findsOneWidget);
+      expect(find.byKey(const ValueKey('history-more-second')), findsNothing);
+      expect(tester.takeException(), isNull);
+    },
+  );
 }

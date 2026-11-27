@@ -55,6 +55,69 @@ class MyApp extends StatelessWidget {
         outline: line,
       ),
       scaffoldBackgroundColor: Colors.white,
+      canvasColor: Colors.white,
+      popupMenuTheme: PopupMenuThemeData(
+        color: Colors.white,
+        surfaceTintColor: Colors.transparent,
+        elevation: 5,
+        shadowColor: const Color(0x18000000),
+        menuPadding: const EdgeInsets.all(6),
+        position: PopupMenuPosition.under,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(12),
+          side: const BorderSide(color: line),
+        ),
+        textStyle: const TextStyle(
+          fontFamily: 'PingFang SC',
+          fontSize: 12,
+          color: ink,
+        ),
+        labelTextStyle: WidgetStateProperty.resolveWith(
+          (states) => TextStyle(
+            fontFamily: 'PingFang SC',
+            fontSize: 12,
+            color: states.contains(WidgetState.disabled)
+                ? const Color(0xFFB8B8B8)
+                : ink,
+          ),
+        ),
+        iconColor: const Color(0xFF666666),
+        iconSize: 18,
+      ),
+      dialogTheme: DialogThemeData(
+        backgroundColor: Colors.white,
+        surfaceTintColor: Colors.transparent,
+        elevation: 8,
+        shadowColor: const Color(0x18000000),
+        barrierColor: const Color(0x40000000),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(18),
+          side: const BorderSide(color: line),
+        ),
+        titleTextStyle: const TextStyle(
+          fontFamily: 'PingFang SC',
+          fontSize: 16,
+          fontWeight: FontWeight.w600,
+          color: ink,
+        ),
+        contentTextStyle: const TextStyle(
+          fontFamily: 'PingFang SC',
+          fontSize: 13,
+          height: 1.8,
+          color: Color(0xFF727272),
+        ),
+        actionsPadding: const EdgeInsets.fromLTRB(20, 0, 20, 16),
+      ),
+      bottomSheetTheme: const BottomSheetThemeData(
+        backgroundColor: Colors.white,
+        surfaceTintColor: Colors.transparent,
+        showDragHandle: true,
+        dragHandleColor: Color(0xFFD5D5D5),
+        dragHandleSize: Size(32, 3),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
+        ),
+      ),
       textTheme: const TextTheme(
         bodyLarge: TextStyle(color: ink, fontSize: 14, height: 1.7),
         bodyMedium: TextStyle(color: ink, fontSize: 13, height: 1.65),
@@ -442,24 +505,21 @@ class _WorkspacePageState extends State<WorkspacePage>
         ),
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 12),
-          child: Row(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Expanded(
-                child: _createButton(
-                  '新建任务',
-                  Icons.add_circle_outline_rounded,
-                  !agent.groupChat,
-                  _newTask,
-                ),
+              _createButton(
+                '新建任务',
+                Icons.add_circle_outline_rounded,
+                !agent.groupChat,
+                _newTask,
               ),
-              const SizedBox(width: 6),
-              Expanded(
-                child: _createButton(
-                  '新建群聊',
-                  Icons.group_add_outlined,
-                  agent.groupChat,
-                  _newGroup,
-                ),
+              const SizedBox(height: 6),
+              _createButton(
+                '新建群聊',
+                Icons.group_add_outlined,
+                agent.groupChat,
+                _newGroup,
               ),
             ],
           ),
@@ -538,43 +598,62 @@ class _WorkspacePageState extends State<WorkspacePage>
                                               color: muted,
                                             ),
                                           ),
-                                        Text(
-                                          item['question'] as String,
-                                          maxLines: 2,
-                                          overflow: TextOverflow.ellipsis,
-                                          style: const TextStyle(
-                                            fontSize: 12,
-                                            height: 1.6,
-                                          ),
-                                        ),
-                                        const SizedBox(height: 4),
-                                        Text(
-                                          taskDateLabel(
-                                            item['createdAt'] as String?,
-                                          ),
-                                          style: const TextStyle(
-                                            color: muted,
-                                            fontSize: 10,
-                                          ),
+                                        Row(
+                                          children: [
+                                            Expanded(
+                                              child: Text(
+                                                item['question'] as String,
+                                                maxLines: 2,
+                                                overflow: TextOverflow.ellipsis,
+                                                style: const TextStyle(
+                                                  fontSize: 12,
+                                                  height: 1.6,
+                                                ),
+                                              ),
+                                            ),
+                                            if (item['pinned'] == true)
+                                              const Padding(
+                                                padding: EdgeInsets.only(
+                                                  left: 4,
+                                                ),
+                                                child: Icon(
+                                                  Icons.push_pin_outlined,
+                                                  size: 12,
+                                                  color: muted,
+                                                ),
+                                              ),
+                                          ],
                                         ),
                                       ],
                                     ),
                                   ),
-                                  const SizedBox(width: 4),
+                                  const SizedBox(width: 8),
                                   SizedBox(
-                                    width: 28,
+                                    width: 44,
                                     height: 28,
-                                    child:
-                                        _hoveredHistoryId == id ||
-                                            _historyMenuId == id
-                                        ? _historyMenu(item)
-                                        : item['pinned'] == true
-                                        ? const Icon(
-                                            Icons.push_pin_outlined,
-                                            size: 14,
-                                            color: muted,
-                                          )
-                                        : const SizedBox.shrink(),
+                                    child: Align(
+                                      alignment: Alignment.centerRight,
+                                      child:
+                                          _hoveredHistoryId == id ||
+                                              _historyMenuId == id ||
+                                              agent.runId == id
+                                          ? SizedBox(
+                                              width: 28,
+                                              height: 28,
+                                              child: _historyMenu(item),
+                                            )
+                                          : Text(
+                                              taskDateLabel(
+                                                item['createdAt'] as String?,
+                                              ),
+                                              key: ValueKey('history-date-$id'),
+                                              textAlign: TextAlign.right,
+                                              style: const TextStyle(
+                                                color: muted,
+                                                fontSize: 10,
+                                              ),
+                                            ),
+                                    ),
                                   ),
                                 ],
                               ),
@@ -850,10 +929,10 @@ class _WorkspacePageState extends State<WorkspacePage>
     final item = _categories[index];
     final selected = _category == index;
     return Material(
-      color: selected ? const Color(0xFFF0F1F0) : const Color(0xFFFAFAFA),
+      color: selected ? ink : const Color(0xFFFAFAFA),
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(20),
-        side: BorderSide(color: selected ? const Color(0xFFD5D8D5) : line),
+        side: BorderSide(color: selected ? ink : line),
       ),
       child: InkWell(
         borderRadius: BorderRadius.circular(20),
@@ -866,9 +945,20 @@ class _WorkspacePageState extends State<WorkspacePage>
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(item.$1, size: 15, color: const Color(0xFF656565)),
+              Icon(
+                item.$1,
+                size: 15,
+                color: selected ? Colors.white : const Color(0xFF656565),
+              ),
               const SizedBox(width: 6),
-              Text(item.$2, style: const TextStyle(fontSize: 12)),
+              Text(
+                item.$2,
+                style: TextStyle(
+                  fontSize: 12,
+                  color: selected ? Colors.white : ink,
+                  fontWeight: selected ? FontWeight.w600 : FontWeight.normal,
+                ),
+              ),
             ],
           ),
         ),
@@ -1126,9 +1216,24 @@ class _WorkspacePageState extends State<WorkspacePage>
                 padding: EdgeInsets.zero,
                 constraints: const BoxConstraints(minWidth: 145),
                 itemBuilder: (_) => [
-                  const PopupMenuItem(value: 'files', child: Text('添加文件')),
-                  const PopupMenuItem(value: 'directory', child: Text('选择目录')),
-                  const PopupMenuItem(value: 'sample', child: Text('内置样例')),
+                  const PopupMenuItem(
+                    height: 36,
+                    padding: EdgeInsets.symmetric(horizontal: 12),
+                    value: 'files',
+                    child: Text('添加文件'),
+                  ),
+                  const PopupMenuItem(
+                    height: 36,
+                    padding: EdgeInsets.symmetric(horizontal: 12),
+                    value: 'directory',
+                    child: Text('选择目录'),
+                  ),
+                  const PopupMenuItem(
+                    height: 36,
+                    padding: EdgeInsets.symmetric(horizontal: 12),
+                    value: 'sample',
+                    child: Text('内置样例'),
+                  ),
                 ],
                 onSelected: (value) {
                   if (value == 'files') {
@@ -1146,7 +1251,7 @@ class _WorkspacePageState extends State<WorkspacePage>
                       ? '${agent.selectedFiles.length} 个附件'
                       : agent.run != null
                       ? '复用本轮资料'
-                      : '支持文档、表格与代码',
+                      : '',
                   maxLines: 1,
                   textAlign: TextAlign.right,
                   overflow: TextOverflow.ellipsis,
@@ -1511,8 +1616,19 @@ class _WorkspacePageState extends State<WorkspacePage>
           for (final item in agent.history)
             ListTile(
               title: Text(item['question'] as String),
-              subtitle: Text(taskDateLabel(item['createdAt'] as String?)),
-              trailing: _historyMenu(item),
+              trailing: SizedBox(
+                width: 44,
+                child: Align(
+                  alignment: Alignment.centerRight,
+                  child:
+                      agent.runId == item['id'] || _historyMenuId == item['id']
+                      ? _historyMenu(item)
+                      : Text(
+                          taskDateLabel(item['createdAt'] as String?),
+                          style: const TextStyle(fontSize: 10, color: muted),
+                        ),
+                ),
+              ),
               onTap: () {
                 Navigator.pop(context);
                 agent.load(item['id'] as String);
@@ -1529,6 +1645,8 @@ class _WorkspacePageState extends State<WorkspacePage>
     return PopupMenuButton<String>(
       key: ValueKey('history-more-$id'),
       tooltip: '更多',
+      constraints: const BoxConstraints.tightFor(width: 148),
+      offset: const Offset(-120, 6),
       padding: EdgeInsets.zero,
       icon: const Icon(Icons.more_horiz, size: 18),
       onOpened: () => setState(() => _historyMenuId = id),
@@ -1541,6 +1659,8 @@ class _WorkspacePageState extends State<WorkspacePage>
       itemBuilder: (_) => [
         PopupMenuItem(
           value: 'pin',
+          height: 36,
+          padding: const EdgeInsets.symmetric(horizontal: 12),
           child: Row(
             children: [
               Icon(pinned ? Icons.push_pin : Icons.push_pin_outlined, size: 16),
@@ -1549,8 +1669,11 @@ class _WorkspacePageState extends State<WorkspacePage>
             ],
           ),
         ),
+        const PopupMenuDivider(height: 9),
         PopupMenuItem(
           value: 'delete',
+          height: 36,
+          padding: const EdgeInsets.symmetric(horizontal: 12),
           enabled: !running,
           child: Row(
             children: [
@@ -1560,7 +1683,14 @@ class _WorkspacePageState extends State<WorkspacePage>
                 color: running ? muted : const Color(0xFFC84E40),
               ),
               const SizedBox(width: 10),
-              const Text('删除'),
+              Text(
+                '删除',
+                style: TextStyle(
+                  color: running
+                      ? const Color(0xFFB8B8B8)
+                      : const Color(0xFFC84E40),
+                ),
+              ),
             ],
           ),
         ),
