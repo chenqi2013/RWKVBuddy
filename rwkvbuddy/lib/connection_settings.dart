@@ -4,8 +4,9 @@ import 'windows_text_editing.dart';
 import 'local_model_panel.dart';
 
 class ConnectionSettings extends StatefulWidget {
-  const ConnectionSettings({super.key, required this.agent});
+  const ConnectionSettings({super.key, required this.agent, this.onClose});
   final AgentController agent;
+  final VoidCallback? onClose;
   @override
   State<ConnectionSettings> createState() => _ConnectionSettingsState();
 }
@@ -208,6 +209,15 @@ class _ConnectionSettingsState extends State<ConnectionSettings> {
   Widget build(BuildContext context) => Scaffold(
     backgroundColor: Colors.white,
     appBar: AppBar(
+      automaticallyImplyLeading: widget.onClose == null,
+      actions: [
+        if (widget.onClose != null)
+          IconButton(
+            tooltip: '关闭设置',
+            onPressed: widget.onClose,
+            icon: const Icon(Icons.close_rounded, size: 20),
+          ),
+      ],
       title: Text(
         editing == null
             ? '模型服务'

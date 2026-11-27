@@ -28,45 +28,28 @@ class TeamControls extends StatelessWidget {
       runSpacing: 4,
       crossAxisAlignment: WrapCrossAlignment.center,
       children: [
-        ChoiceChip(
-          label: const Text('单助手'),
-          selected: !agent.groupChat,
-          onSelected: agent.busy
-              ? null
-              : (_) => agent.configureTeam(false, agent.team),
-        ),
-        ChoiceChip(
-          label: const Text('专家团群聊'),
-          selected: agent.groupChat,
-          avatar: const Icon(Icons.groups_outlined, size: 17),
-          onSelected: agent.busy
-              ? null
-              : (_) => agent.configureTeam(true, agent.team),
-        ),
-        if (agent.groupChat) ...[
-          TextButton.icon(
-            onPressed: agent.busy ? null : () => _edit(context),
-            icon: const Icon(Icons.tune, size: 16),
-            label: Text(
-              '${agent.team['name']} · ${(agent.team['members'] as List).length + 1}人',
-            ),
+        TextButton.icon(
+          onPressed: agent.busy ? null : () => _edit(context),
+          icon: const Icon(Icons.tune, size: 16),
+          label: Text(
+            '${agent.team['name']} · ${(agent.team['members'] as List).length + 1}人',
           ),
-          PopupMenuButton<String>(
-            tooltip: '@成员',
-            enabled: !agent.busy,
-            onSelected: onMention,
-            icon: const Icon(Icons.alternate_email, size: 19),
-            itemBuilder: (_) => [
-              const PopupMenuItem(value: '全体', child: Text('@全体')),
-              for (final member in agent.team['members'] as List)
-                PopupMenuItem(
-                  value: member['name'] as String,
-                  child: Text('@${member['name']}'),
-                ),
-              const PopupMenuItem(value: '主持人', child: Text('@主持人')),
-            ],
-          ),
-        ],
+        ),
+        PopupMenuButton<String>(
+          tooltip: '@成员',
+          enabled: !agent.busy,
+          onSelected: onMention,
+          icon: const Icon(Icons.alternate_email, size: 19),
+          itemBuilder: (_) => [
+            const PopupMenuItem(value: '全体', child: Text('@全体')),
+            for (final member in agent.team['members'] as List)
+              PopupMenuItem(
+                value: member['name'] as String,
+                child: Text('@${member['name']}'),
+              ),
+            const PopupMenuItem(value: '主持人', child: Text('@主持人')),
+          ],
+        ),
       ],
     ),
   );

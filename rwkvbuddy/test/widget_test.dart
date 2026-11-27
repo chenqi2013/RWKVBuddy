@@ -233,14 +233,14 @@ void main() {
         },
       ];
       await tester.pumpWidget(MyApp(controller: controller));
-      await tester.tap(find.byTooltip('模型服务设置'));
+      await tester.tap(find.text('本地演示'));
       await tester.pumpAndSettle();
       expect(find.text('办公室服务'), findsOneWidget);
       await tester.tap(find.text('使用此连接'));
       await tester.pumpAndSettle();
       expect(controller.mode, 'rwkv');
       expect(controller.config['model'], 'rwkv-test');
-      await tester.tap(find.byTooltip('模型服务设置'));
+      await tester.tap(find.textContaining('在线 API ·'));
       await tester.pumpAndSettle();
       await tester.tap(find.text('新建连接').last);
       await tester.pumpAndSettle();

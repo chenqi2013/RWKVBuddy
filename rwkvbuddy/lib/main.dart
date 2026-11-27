@@ -379,6 +379,37 @@ class _WorkspacePageState extends State<WorkspacePage>
     promptFocus.requestFocus();
   }
 
+  Future<void> _newGroup() async {
+    final team = await showTeamBuilder(context, agent, create: true);
+    if (!mounted || team == null) return;
+    _newTask();
+    agent.configureTeam(true, team);
+  }
+
+  Widget _createButton(
+    String label,
+    IconData icon,
+    bool selected,
+    VoidCallback onPressed,
+  ) => TextButton.icon(
+    onPressed: agent.busy ? null : onPressed,
+    icon: Icon(icon, size: 15),
+    label: Text(
+      label,
+      style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w500),
+    ),
+    style: TextButton.styleFrom(
+      foregroundColor: ink,
+      backgroundColor: selected ? const Color(0xFFEAEAEA) : Colors.transparent,
+      padding: const EdgeInsets.symmetric(horizontal: 6),
+      minimumSize: const Size(0, 40),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(9),
+        side: BorderSide(color: selected ? Colors.transparent : line),
+      ),
+    ),
+  );
+
   Widget _sidebar() => Container(
     decoration: const BoxDecoration(
       color: surface,
@@ -411,48 +442,26 @@ class _WorkspacePageState extends State<WorkspacePage>
         ),
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 12),
-          child: Material(
-            color: const Color(0xFFECECEC),
-            borderRadius: BorderRadius.circular(9),
-            child: InkWell(
-              borderRadius: BorderRadius.circular(9),
-              onTap: agent.busy ? null : _newTask,
-              child: const Padding(
-                padding: EdgeInsets.symmetric(horizontal: 13, vertical: 11),
-                child: Row(
-                  children: [
-                    Icon(Icons.add_circle_outline_rounded, size: 18),
-                    SizedBox(width: 10),
-                    Text(
-                      '新建任务',
-                      style: TextStyle(
-                        fontSize: 13,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                  ],
+          child: Row(
+            children: [
+              Expanded(
+                child: _createButton(
+                  '新建任务',
+                  Icons.add_circle_outline_rounded,
+                  !agent.groupChat,
+                  _newTask,
                 ),
               ),
-            ),
-          ),
-        ),
-        Padding(
-          padding: const EdgeInsets.fromLTRB(12, 6, 12, 0),
-          child: TextButton.icon(
-            onPressed: agent.busy
-                ? null
-                : () async {
-                    final team = await showTeamBuilder(
-                      context,
-                      agent,
-                      create: true,
-                    );
-                    if (!mounted || team == null) return;
-                    _newTask();
-                    agent.configureTeam(true, team);
-                  },
-            icon: const Icon(Icons.group_add_outlined, size: 18),
-            label: const Text('新建群聊'),
+              const SizedBox(width: 6),
+              Expanded(
+                child: _createButton(
+                  '新建群聊',
+                  Icons.group_add_outlined,
+                  agent.groupChat,
+                  _newGroup,
+                ),
+              ),
+            ],
           ),
         ),
         const Padding(
@@ -668,11 +677,6 @@ class _WorkspacePageState extends State<WorkspacePage>
             )
           else
             const Spacer(),
-          IconButton(
-            tooltip: '模型服务设置',
-            onPressed: agent.busy ? null : _settings,
-            icon: const Icon(Icons.tune_rounded, size: 19),
-          ),
         ],
       ),
     ),
@@ -910,17 +914,18 @@ class _WorkspacePageState extends State<WorkspacePage>
     child: Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        TeamControls(
-          agent: agent,
-          onMention: (name) {
-            prompt.text =
-                '@$name ${prompt.text.replaceFirst(RegExp(r"^@[^ ]+ ?"), "")}';
-            prompt.selection = TextSelection.collapsed(
-              offset: prompt.text.length,
-            );
-            promptFocus.requestFocus();
-          },
-        ),
+        if (agent.groupChat)
+          TeamControls(
+            agent: agent,
+            onMention: (name) {
+              prompt.text =
+                  '@$name ${prompt.text.replaceFirst(RegExp(r"^@[^ ]+ ?"), "")}';
+              prompt.selection = TextSelection.collapsed(
+                offset: prompt.text.length,
+              );
+              promptFocus.requestFocus();
+            },
+          ),
         Container(
           decoration: BoxDecoration(
             color: Colors.white,
@@ -1492,7 +1497,15 @@ class _WorkspacePageState extends State<WorkspacePage>
             title: const Text('新建任务'),
             onTap: () {
               Navigator.pop(context);
-              agent.newTask();
+              _newTask();
+            },
+          ),
+          ListTile(
+            leading: const Icon(Icons.group_add_outlined),
+            title: const Text('新建群聊'),
+            onTap: () {
+              Navigator.pop(context);
+              _newGroup();
             },
           ),
           for (final item in agent.history)
@@ -1580,8 +1593,26 @@ class _WorkspacePageState extends State<WorkspacePage>
   }
 
   Future<void> _settings() async {
-    await Navigator.of(context).push(
-      MaterialPageRoute<void>(builder: (_) => ConnectionSettings(agent: agent)),
+    await showDialog<void>(
+      context: context,
+      barrierColor: Colors.black.withValues(alpha: .25),
+      builder: (dialogContext) => Dialog(
+        key: const Key('settings-dialog'),
+        backgroundColor: Colors.white,
+        surfaceTintColor: Colors.transparent,
+        insetPadding: const EdgeInsets.all(24),
+        clipBehavior: Clip.antiAlias,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+        child: SizedBox(
+          key: const Key('settings-panel'),
+          width: 800,
+          height: 720,
+          child: ConnectionSettings(
+            agent: agent,
+            onClose: () => Navigator.pop(dialogContext),
+          ),
+        ),
+      ),
     );
   }
 }

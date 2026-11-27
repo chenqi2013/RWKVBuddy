@@ -89,7 +89,7 @@ void main() {
   testWidgets(
     'team editor customizes the roster and mention menu inserts a valid address',
     (tester) async {
-      final agent = AgentController(autoConnect: false);
+      final agent = AgentController(autoConnect: false)..groupChat = true;
       addTearDown(agent.dispose);
       tester.view.physicalSize = const Size(1000, 900);
       tester.view.devicePixelRatio = 1;
@@ -102,8 +102,6 @@ void main() {
           child: MyApp(controller: agent),
         ),
       );
-      await tester.tap(find.text('专家团群聊'));
-      await tester.pumpAndSettle();
       expect(agent.groupChat, isTrue);
       await tester.tap(find.text('创作与研发团队 · 5人'));
       await tester.pumpAndSettle();
@@ -219,6 +217,47 @@ void main() {
       expect(tester.takeException(), isNull);
     });
   }
+  testWidgets(
+    'sidebar separates task and group modes and opens settings in a centered dialog',
+    (tester) async {
+      final agent = AgentController(autoConnect: false)..groupChat = true;
+      addTearDown(agent.dispose);
+      tester.view.physicalSize = const Size(1280, 900);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      await tester.pumpWidget(MyApp(controller: agent));
+      expect(find.text('单助手'), findsNothing);
+      expect(find.text('专家团群聊'), findsNothing);
+      expect(find.byTooltip('@成员'), findsOneWidget);
+      expect(
+        tester.getCenter(find.text('新建任务')).dy,
+        tester.getCenter(find.text('新建群聊')).dy,
+      );
+      expect(find.byTooltip('模型服务设置'), findsNothing);
+      await tester.tap(find.text('新建任务'));
+      await tester.pumpAndSettle();
+      expect(agent.groupChat, isFalse);
+      expect(find.byTooltip('@成员'), findsNothing);
+      expect(find.byKey(const Key('group-add-files')), findsNothing);
+      expect(find.text('创作与研发团队 · 5人'), findsNothing);
+      await tester.tap(find.byTooltip('模型服务'));
+      await tester.pumpAndSettle();
+      final dialog = find.byKey(const Key('settings-dialog'));
+      expect(dialog, findsOneWidget);
+      expect(
+        tester.getSize(find.byKey(const Key('settings-panel'))).width,
+        800,
+      );
+      expect(find.byTooltip('关闭设置'), findsOneWidget);
+      await tester.tap(find.byTooltip('关闭设置'));
+      await tester.pumpAndSettle();
+      expect(dialog, findsNothing);
+      expect(agent.groupChat, isFalse);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
   testWidgets(
     'sidebar creation supports presets, mode selection and preserves the current chat on cancel',
     (tester) async {

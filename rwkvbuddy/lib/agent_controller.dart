@@ -419,6 +419,7 @@ class AgentController extends ChangeNotifier {
 
   void newTask() {
     if (busy) return;
+    groupChat = false;
     run = null;
     events = [];
     traces = [];
