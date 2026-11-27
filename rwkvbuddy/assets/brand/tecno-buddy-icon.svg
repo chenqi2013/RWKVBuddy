@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <title>TECNO Buddy desktop icon</title>
+  <desc>A white conversation bubble with a blue T on a rounded blue tile.</desc>
+  <defs>
+    <linearGradient id="tile" x1="140" y1="96" x2="870" y2="940" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#1686FF"/>
+      <stop offset="0.48" stop-color="#0864F7"/>
+      <stop offset="1" stop-color="#1246DC"/>
+    </linearGradient>
+  </defs>
+  <rect x="96" y="96" width="832" height="832" rx="184" fill="url(#tile)"/>
+  <path d="M360 266H664C733 266 788 321 788 390V572C788 641 733 696 664 696H628L700 766V696H360C291 696 236 641 236 572V390C236 321 291 266 360 266Z" fill="#FFFFFF"/>
+  <rect x="340" y="362" width="344" height="80" rx="24" fill="#0966F5"/>
+  <rect x="472" y="410" width="80" height="190" rx="24" fill="#0966F5"/>
+</svg>

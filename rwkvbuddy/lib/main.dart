@@ -8,7 +8,6 @@ import 'package:flutter/services.dart';
 import 'agent_controller.dart';
 import 'connection_settings.dart';
 import 'trace_view.dart';
-import 'windows_text_editing.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
 
 const ink = Color(0xFF252525);
@@ -38,7 +37,7 @@ class MyApp extends StatelessWidget {
   final AgentController? controller;
   @override
   Widget build(BuildContext context) => MaterialApp(
-    title: 'TECNO Buddy · 文件助手',
+    title: 'RWKVBuddy · 文件助手',
     debugShowCheckedModeBanner: false,
     theme: ThemeData(
       useMaterial3: true,
@@ -305,7 +304,7 @@ class _WorkspacePageState extends State<WorkspacePage>
 
   Future<void> exportReport() async {
     final location = await getSaveLocation(
-      suggestedName: 'TECNO Buddy-分析报告.md',
+      suggestedName: 'RWKVBuddy-分析报告.md',
       acceptedTypeGroups: const [
         XTypeGroup(label: 'Markdown 报告', extensions: ['md']),
       ],
@@ -392,7 +391,7 @@ class _WorkspacePageState extends State<WorkspacePage>
             children: [
               const Expanded(
                 child: Text(
-                  'TECNO Buddy',
+                  'RWKVBuddy',
                   style: TextStyle(
                     fontSize: 16,
                     fontWeight: FontWeight.w700,
@@ -757,7 +756,7 @@ class _WorkspacePageState extends State<WorkspacePage>
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
                         Text(
-                          'TECNO Buddy，我帮你',
+                          'RWKVBuddy，我帮你',
                           textAlign: TextAlign.center,
                           style: TextStyle(
                             fontSize: compact ? 27 : 32,
@@ -842,7 +841,7 @@ class _WorkspacePageState extends State<WorkspacePage>
   Widget _suggestion(String label, String text, {bool sample = false}) =>
       Padding(
         padding: const EdgeInsets.only(bottom: 9),
-        child: Material(
+        child: Material(   
           color: Colors.white,
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(22),
@@ -949,25 +948,22 @@ class _WorkspacePageState extends State<WorkspacePage>
                       },
                     ),
                   },
-                  child: WindowsTextEditing(
+                  child: TextField(
                     controller: prompt,
-                    child: TextField(
-                      controller: prompt,
-                      focusNode: promptFocus,
-                      enabled: true,
-                      minLines: home ? 3 : 1,
-                      maxLines: home ? 5 : 3,
-                      style: const TextStyle(fontSize: 14, height: 1.8),
-                      decoration: InputDecoration(
-                        hintText: home
-                            ? '今天帮你做些什么？添加文件，或直接说说你的想法…'
-                            : '继续提问，或告诉我需要怎样修改…',
-                        filled: false,
-                        border: InputBorder.none,
-                        enabledBorder: InputBorder.none,
-                        focusedBorder: InputBorder.none,
-                        contentPadding: const EdgeInsets.symmetric(vertical: 8),
-                      ),
+                    focusNode: promptFocus,
+                    enabled: true,
+                    minLines: home ? 3 : 1,
+                    maxLines: home ? 5 : 3,
+                    style: const TextStyle(fontSize: 14, height: 1.8),
+                    decoration: InputDecoration(
+                      hintText: home
+                          ? '今天帮你做些什么？添加文件，或直接说说你的想法…'
+                          : '继续提问，或告诉我需要怎样修改…',
+                      filled: false,
+                      border: InputBorder.none,
+                      enabledBorder: InputBorder.none,
+                      focusedBorder: InputBorder.none,
+                      contentPadding: const EdgeInsets.symmetric(vertical: 8),
                     ),
                   ),
                 ),
@@ -1219,7 +1215,7 @@ class _WorkspacePageState extends State<WorkspacePage>
                   ),
                   SizedBox(width: 8),
                   Text(
-                    'TECNO Buddy',
+                    'RWKVBuddy',
                     style: TextStyle(fontWeight: FontWeight.w600),
                   ),
                 ],
@@ -1382,7 +1378,7 @@ class _WorkspacePageState extends State<WorkspacePage>
 
   Future<void> exportTrace() async {
     final location = await getSaveLocation(
-      suggestedName: 'TECNO Buddy-执行轨迹.json',
+      suggestedName: 'RWKVBuddy-执行轨迹.json',
       acceptedTypeGroups: const [
         XTypeGroup(label: '执行轨迹 JSON', extensions: ['json']),
       ],
