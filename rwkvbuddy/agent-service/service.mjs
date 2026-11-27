@@ -45,7 +45,7 @@ function history() {
     try {
       const run = savedRun(entry.name);
       return [{ id: run.id, question: run.question, status: run.status, createdAt: run.createdAt,
-        mode: run.mode, workspace: run.workspace, pinned: pinnedRuns.has(run.id) }];
+        mode: run.mode, workspace: run.workspace, teamName: run.team?.name || '', pinned: pinnedRuns.has(run.id) }];
     } catch { return []; }
   }).sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.createdAt.localeCompare(a.createdAt)).slice(0, 60);
 }
@@ -102,7 +102,7 @@ function processCommand(command) {
         while (parent && turns.length < 20) {
           try {
             const previous = savedRun(parent);
-            turns.unshift({ id: previous.id, question: previous.question, answer: previous.answer, report: previous.report, status: previous.status, deliverables: previous.deliverables || [], traces: previous.traces || [], events: previous.events || [] });
+            turns.unshift({ id: previous.id, question: previous.question, answer: previous.answer, report: previous.report, status: previous.status, deliverables: previous.deliverables || [], traces: previous.traces || [], events: previous.events || [], team: previous.team || null, messages: previous.messages || [] });
             parent = previous.parentRunId;
           } catch { break; }
         }
@@ -137,6 +137,8 @@ function processCommand(command) {
         if (command.parentRunId) {
           const parent = savedRun(command.parentRunId);
           command.context = { question: parent.question, report: (parent.answer || parent.report || '').slice(0, 16000) };
+          if (parent.team) command.context.discussion = (parent.messages || []).filter(message => message.status === 'completed')
+            .map(({ roleId, name, content }) => ({ roleId, name, content: content.slice(0, 2000) }));
           const turns = [];
           let previous = parent;
           let remaining = 16000;

@@ -48,6 +48,33 @@ class AgentController extends ChangeNotifier {
   String activeConnectionId = '';
   bool inputsChanged = false;
   bool busy = false;
+  bool groupChat = false;
+  Json team = {
+    'name': '创作与研发团队',
+    'members': [
+      {'id': 'strategy', 'name': '策划', 'prompt': '分析目标、用户和约束，提出方案方向与执行步骤。'},
+      {
+        'id': 'copywriter',
+        'name': '文案',
+        'prompt': '根据用户目标和已有讨论，撰写清晰、具体、可使用的内容。',
+      },
+      {'id': 'designer', 'name': '设计', 'prompt': '提出视觉、交互和信息呈现建议，说明设计依据与交付要求。'},
+      {
+        'id': 'developer',
+        'name': '研发',
+        'prompt': '评估技术可行性、实现步骤和风险，明确已核实与待验证的部分。',
+      },
+    ],
+  };
+
+  void configureTeam(bool enabled, Json value) {
+    if (busy) return;
+    groupChat = enabled;
+    team = value;
+    update();
+    unawaited(savePreferences());
+  }
+
   String error = '';
   String notice = '';
   String workspace = '';
@@ -222,6 +249,8 @@ class AgentController extends ChangeNotifier {
       case 'run.loaded':
         final loaded = Map<String, dynamic>.from(payload['run'] as Map);
         run = loaded;
+        groupChat = loaded['team'] is Map;
+        if (groupChat) team = Map<String, dynamic>.from(loaded['team'] as Map);
         events = _maps(loaded['events']);
         traces = _maps(loaded['traces']);
         turns = _maps(payload['turns']);
@@ -244,6 +273,21 @@ class AgentController extends ChangeNotifier {
       case 'trace.delta':
         final index = traces.indexWhere((item) => item['id'] == payload['id']);
         if (index >= 0) traces[index].addAll(payload);
+      case 'team.updated':
+        run?['team'] = payload['team'];
+        run?['template'] = payload['template'];
+      case 'message.updated':
+        final message = Map<String, dynamic>.from(payload['message'] as Map);
+        final messages = _maps(run?['messages']);
+        final index = messages.indexWhere(
+          (item) => item['id'] == message['id'],
+        );
+        if (index < 0) {
+          messages.add(message);
+        } else {
+          messages[index] = message;
+        }
+        run?['messages'] = messages;
       case 'plan.created':
         run?['template'] = payload['template'];
       case 'input.completed':
@@ -307,6 +351,11 @@ class AgentController extends ChangeNotifier {
       update();
       return;
     }
+    if (groupChat && mode != 'rwkv') {
+      error = '专家团群聊需要模型，请先在“模型服务”中启用在线 API 或本地模型';
+      update();
+      return;
+    }
     if (sourceMode == 'files' && selectedFiles.isEmpty) {
       error = '请先添加文件或选择资料目录';
       update();
@@ -342,6 +391,7 @@ class AgentController extends ChangeNotifier {
       'selectedFiles': List<String>.from(selectedFiles),
       'mode': mode,
       'outputMode': 'auto',
+      if (groupChat) 'team': team,
       'config': config,
     });
     inputsChanged = false;
@@ -625,6 +675,10 @@ class AgentController extends ChangeNotifier {
         final saved = Map<String, dynamic>.from(
           jsonDecode(await _preferences!.readAsString()) as Map,
         );
+        groupChat = saved['groupChat'] == true;
+        if (saved['team'] is Map) {
+          team = Map<String, dynamic>.from(saved['team'] as Map);
+        }
         _defaultConnectionVersion =
             (saved['defaultConnectionVersion'] as num? ?? 0).toInt();
         if (saved['config'] is Map) {
@@ -694,6 +748,8 @@ class AgentController extends ChangeNotifier {
         .toList();
     final content = jsonEncode({
       'workspace': workspace,
+      'groupChat': groupChat,
+      'team': team,
       'mode': mode,
       'config': safe,
       'connections': publicProfiles,

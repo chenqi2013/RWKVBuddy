@@ -18,11 +18,11 @@ class _ConnectionSettingsState extends State<ConnectionSettings> {
   final headers = TextEditingController();
   final stateId = TextEditingController();
   final adapterId = TextEditingController();
+  final concurrency = TextEditingController(text: '2');
   String? editing;
   String protocol = 'chat';
   String inferenceMode = 'online';
   String sourceFilter = 'online';
-  int concurrency = 2;
   int maxTokens = 4096;
   double temperature = 0.2;
   bool? enableThinking;
@@ -47,6 +47,7 @@ class _ConnectionSettingsState extends State<ConnectionSettings> {
       headers,
       stateId,
       adapterId,
+      concurrency,
     ]) {
       controller.dispose();
     }
@@ -85,9 +86,7 @@ class _ConnectionSettingsState extends State<ConnectionSettings> {
       enableThinking =
           value['enableThinking'] as bool? ?? (local ? false : null);
       jsonOutput = value['jsonOutput'] as bool?;
-      concurrency = (value['concurrency'] as num? ?? (local ? 1 : 2))
-          .toInt()
-          .clamp(1, 3);
+      concurrency.text = local ? '1' : '${value['concurrency'] ?? 2}';
       maxTokens = (value['maxTokens'] as num? ?? (local ? 1024 : 4096)).toInt();
       temperature = (value['temperature'] as num? ?? 0.2).toDouble().clamp(
         0,
@@ -99,6 +98,14 @@ class _ConnectionSettingsState extends State<ConnectionSettings> {
   }
 
   Json draft() {
+    final requestLimit = inferenceMode == 'local'
+        ? 1
+        : int.tryParse(concurrency.text.trim());
+    if (requestLimit == null ||
+        requestLimit < 1 ||
+        requestLimit > 9007199254740991) {
+      throw const FormatException('并发模型请求请输入有效的正整数');
+    }
     final url = Uri.tryParse(address.text.trim());
     if (url == null ||
         !['http', 'https'].contains(url.scheme) ||
@@ -134,7 +141,7 @@ class _ConnectionSettingsState extends State<ConnectionSettings> {
       'headers': inferenceMode == 'local' ? <String, String>{} : custom,
       'stateId': stateId.text.trim(),
       'adapterId': adapterId.text.trim(),
-      'concurrency': inferenceMode == 'local' ? 1 : concurrency,
+      'concurrency': requestLimit,
       'maxTokens': maxTokens,
       'temperature': temperature,
       if (protocol == 'chat' && enableThinking != null)
@@ -424,7 +431,7 @@ class _ConnectionSettingsState extends State<ConnectionSettings> {
                 model.text = 'rwkv7-g1l-1.5b-Q4_K_M';
                 protocol = 'chat';
                 enableThinking = false;
-                concurrency = 1;
+                concurrency.text = '1';
                 maxTokens = 1024;
                 token.clear();
                 headers.clear();
@@ -544,15 +551,21 @@ class _ConnectionSettingsState extends State<ConnectionSettings> {
       title: const Text('生成与并发参数'),
       initiallyExpanded: false,
       children: [
-        DropdownButtonFormField<int>(
-          value: concurrency,
-          decoration: const InputDecoration(labelText: '并发模型请求'),
-          items: [1, 2, 3]
-              .map((n) => DropdownMenuItem(value: n, child: Text('$n 个')))
-              .toList(),
-          onChanged: inferenceMode == 'local' || testing || saving
-              ? null
-              : (value) => setState(() => concurrency = value!),
+        WindowsTextEditing(
+          controller: concurrency,
+          enabled: inferenceMode != 'local' && !testing && !saving,
+          child: TextField(
+            key: const Key('model-concurrency'),
+            controller: concurrency,
+            keyboardType: TextInputType.number,
+            enabled: inferenceMode != 'local' && !testing && !saving,
+            decoration: InputDecoration(
+              labelText: '并发模型请求',
+              helperText: inferenceMode == 'local'
+                  ? '本地模型当前固定为 1'
+                  : '填写正整数，例如 4、6、8；实际并发受模型服务能力影响',
+            ),
+          ),
         ),
         const SizedBox(height: 16),
         DropdownButtonFormField<int>(

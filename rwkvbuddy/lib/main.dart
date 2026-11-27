@@ -8,6 +8,7 @@ import 'package:flutter/services.dart';
 import 'agent_controller.dart';
 import 'connection_settings.dart';
 import 'trace_view.dart';
+import 'team_chat.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
 
 const ink = Color(0xFF252525);
@@ -37,7 +38,7 @@ class MyApp extends StatelessWidget {
   final AgentController? controller;
   @override
   Widget build(BuildContext context) => MaterialApp(
-    title: 'RWKVBuddy · 文件助手',
+    title: 'TECNO Buddy · 文件助手',
     debugShowCheckedModeBanner: false,
     theme: ThemeData(
       useMaterial3: true,
@@ -304,7 +305,7 @@ class _WorkspacePageState extends State<WorkspacePage>
 
   Future<void> exportReport() async {
     final location = await getSaveLocation(
-      suggestedName: 'RWKVBuddy-分析报告.md',
+      suggestedName: 'TECNO Buddy-分析报告.md',
       acceptedTypeGroups: const [
         XTypeGroup(label: 'Markdown 报告', extensions: ['md']),
       ],
@@ -391,7 +392,7 @@ class _WorkspacePageState extends State<WorkspacePage>
             children: [
               const Expanded(
                 child: Text(
-                  'RWKVBuddy',
+                  'TECNO Buddy',
                   style: TextStyle(
                     fontSize: 16,
                     fontWeight: FontWeight.w700,
@@ -432,6 +433,19 @@ class _WorkspacePageState extends State<WorkspacePage>
                 ),
               ),
             ),
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(12, 6, 12, 0),
+          child: TextButton.icon(
+            onPressed: agent.busy
+                ? null
+                : () {
+                    _newTask();
+                    agent.configureTeam(true, agent.team);
+                  },
+            icon: const Icon(Icons.group_add_outlined, size: 18),
+            label: const Text('新建群聊'),
           ),
         ),
         const Padding(
@@ -499,6 +513,15 @@ class _WorkspacePageState extends State<WorkspacePage>
                                       crossAxisAlignment:
                                           CrossAxisAlignment.start,
                                       children: [
+                                        if ((item['teamName'] as String? ?? '')
+                                            .isNotEmpty)
+                                          Text(
+                                            '群聊 · ${item['teamName']}',
+                                            style: const TextStyle(
+                                              fontSize: 10,
+                                              color: muted,
+                                            ),
+                                          ),
                                         Text(
                                           item['question'] as String,
                                           maxLines: 2,
@@ -756,7 +779,7 @@ class _WorkspacePageState extends State<WorkspacePage>
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
                         Text(
-                          'RWKVBuddy，我帮你',
+                          'TECNO Buddy，我帮你',
                           textAlign: TextAlign.center,
                           style: TextStyle(
                             fontSize: compact ? 27 : 32,
@@ -841,7 +864,7 @@ class _WorkspacePageState extends State<WorkspacePage>
   Widget _suggestion(String label, String text, {bool sample = false}) =>
       Padding(
         padding: const EdgeInsets.only(bottom: 9),
-        child: Material(   
+        child: Material(
           color: Colors.white,
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(22),
@@ -876,6 +899,17 @@ class _WorkspacePageState extends State<WorkspacePage>
     child: Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
+        TeamControls(
+          agent: agent,
+          onMention: (name) {
+            prompt.text =
+                '@$name ${prompt.text.replaceFirst(RegExp(r"^@[^ ]+ ?"), "")}';
+            prompt.selection = TextSelection.collapsed(
+              offset: prompt.text.length,
+            );
+            promptFocus.requestFocus();
+          },
+        ),
         Container(
           decoration: BoxDecoration(
             color: Colors.white,
@@ -956,7 +990,9 @@ class _WorkspacePageState extends State<WorkspacePage>
                     maxLines: home ? 5 : 3,
                     style: const TextStyle(fontSize: 14, height: 1.8),
                     decoration: InputDecoration(
-                      hintText: home
+                      hintText: agent.groupChat
+                          ? '向专家团提问，或 @成员名 单独交流…'
+                          : home
                           ? '今天帮你做些什么？添加文件，或直接说说你的想法…'
                           : '继续提问，或告诉我需要怎样修改…',
                       filled: false,
@@ -1045,6 +1081,13 @@ class _WorkspacePageState extends State<WorkspacePage>
           padding: const EdgeInsets.fromLTRB(13, 2, 13, 4),
           child: Row(
             children: [
+              if (agent.groupChat)
+                TextButton.icon(
+                  key: const Key('group-add-files'),
+                  onPressed: agent.busy ? null : chooseFiles,
+                  icon: const Icon(Icons.attach_file, size: 14),
+                  label: const Text('添加文件', style: TextStyle(fontSize: 11)),
+                ),
               Flexible(
                 child: TextButton.icon(
                   onPressed: agent.busy ? null : chooseDirectory,
@@ -1196,126 +1239,144 @@ class _WorkspacePageState extends State<WorkspacePage>
             ),
           ),
         ),
-        Container(
-          padding: const EdgeInsets.symmetric(vertical: 16),
-          margin: const EdgeInsets.only(bottom: 18),
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(14),
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Row(
-                children: [
-                  Icon(
-                    Icons.auto_awesome_outlined,
-                    color: Color(0xFF56685C),
-                    size: 18,
-                  ),
-                  SizedBox(width: 8),
-                  Text(
-                    'RWKVBuddy',
-                    style: TextStyle(fontWeight: FontWeight.w600),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 12),
-              if (turn['id'] == agent.runId ||
-                  (turn['traces'] as List? ?? []).isNotEmpty) ...[
-                TraceView(
-                  agent: agent,
-                  turn: turn,
-                  onExport: exportTrace,
-                  showAnswerDraft: false,
-                ),
-                const SizedBox(height: 14),
-              ],
-              if (_answerText(turn).isNotEmpty) ...[
-                Text(
-                  (turn['answer'] as String? ?? '').isNotEmpty
-                      ? '生成结果'
-                      : turn['status'] == 'running'
-                      ? '回答草稿 · 正在生成，尚未完成'
-                      : '回答草稿 · 已中断，未作为结果提交',
-                  style: const TextStyle(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-                const SizedBox(height: 10),
-                MarkdownBody(
-                  data: _answerText(turn),
-                  selectable: true,
-                  styleSheet: MarkdownStyleSheet.fromTheme(Theme.of(context))
-                      .copyWith(
-                        p: const TextStyle(
-                          fontSize: 14,
-                          height: 1.9,
-                          color: ink,
-                        ),
-                        h1: const TextStyle(
-                          fontSize: 24,
-                          height: 1.7,
-                          fontWeight: FontWeight.w600,
-                        ),
-                        h2: const TextStyle(
-                          fontSize: 19,
-                          height: 1.7,
-                          fontWeight: FontWeight.w600,
-                        ),
-                        h3: const TextStyle(
-                          fontSize: 16,
-                          height: 1.7,
-                          fontWeight: FontWeight.w600,
-                        ),
-                        code: const TextStyle(
-                          fontFamily: 'Menlo',
-                          fontSize: 12,
-                          backgroundColor: surface,
-                        ),
-                        codeblockDecoration: BoxDecoration(
-                          color: surface,
-                          borderRadius: BorderRadius.circular(10),
-                        ),
-                        blockSpacing: 14,
-                      ),
-                ),
-              ],
-              if (turn['status'] != 'running' &&
-                  (turn['answer'] as String? ?? '').isEmpty)
-                Text(
-                  turn['error'] as String? ??
-                      statusLabel(turn['status'] as String?),
-                  style: const TextStyle(color: muted),
-                ),
-              if ((turn['deliverables'] as List? ?? []).isNotEmpty)
-                _deliveryCards(turn),
-              if (turn['id'] == agent.runId) ...[
-                const SizedBox(height: 14),
-                Wrap(
-                  spacing: 8,
+        if (turn['team'] is Map)
+          TeamConversation(
+            agent: agent,
+            turn: turn,
+            files: (turn['deliverables'] as List? ?? []).isNotEmpty
+                ? _deliveryCards(turn)
+                : null,
+            trace: TraceView(
+              agent: agent,
+              turn: turn,
+              onExport: exportTrace,
+              showAnswerDraft: false,
+            ),
+            onExport: turn['id'] == agent.runId && agent.report.isNotEmpty
+                ? exportReport
+                : null,
+          )
+        else
+          Container(
+            padding: const EdgeInsets.symmetric(vertical: 16),
+            margin: const EdgeInsets.only(bottom: 18),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(14),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Row(
                   children: [
-                    if (agent.report.isNotEmpty)
-                      TextButton.icon(
-                        onPressed: exportReport,
-                        icon: const Icon(Icons.download_outlined, size: 16),
-                        label: const Text('导出结果'),
-                      ),
-                    if (agent.answer.isNotEmpty)
-                      IconButton(
-                        tooltip: '复制回答',
-                        onPressed: () => Clipboard.setData(
-                          ClipboardData(text: agent.answer),
-                        ),
-                        icon: const Icon(Icons.copy_outlined, size: 16),
-                      ),
+                    Icon(
+                      Icons.auto_awesome_outlined,
+                      color: Color(0xFF56685C),
+                      size: 18,
+                    ),
+                    SizedBox(width: 8),
+                    Text(
+                      'TECNO Buddy',
+                      style: TextStyle(fontWeight: FontWeight.w600),
+                    ),
                   ],
                 ),
+                const SizedBox(height: 12),
+                if (turn['id'] == agent.runId ||
+                    (turn['traces'] as List? ?? []).isNotEmpty) ...[
+                  TraceView(
+                    agent: agent,
+                    turn: turn,
+                    onExport: exportTrace,
+                    showAnswerDraft: false,
+                  ),
+                  const SizedBox(height: 14),
+                ],
+                if (_answerText(turn).isNotEmpty) ...[
+                  Text(
+                    (turn['answer'] as String? ?? '').isNotEmpty
+                        ? '生成结果'
+                        : turn['status'] == 'running'
+                        ? '回答草稿 · 正在生成，尚未完成'
+                        : '回答草稿 · 已中断，未作为结果提交',
+                    style: const TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  MarkdownBody(
+                    data: _answerText(turn),
+                    selectable: true,
+                    styleSheet: MarkdownStyleSheet.fromTheme(Theme.of(context))
+                        .copyWith(
+                          p: const TextStyle(
+                            fontSize: 14,
+                            height: 1.9,
+                            color: ink,
+                          ),
+                          h1: const TextStyle(
+                            fontSize: 24,
+                            height: 1.7,
+                            fontWeight: FontWeight.w600,
+                          ),
+                          h2: const TextStyle(
+                            fontSize: 19,
+                            height: 1.7,
+                            fontWeight: FontWeight.w600,
+                          ),
+                          h3: const TextStyle(
+                            fontSize: 16,
+                            height: 1.7,
+                            fontWeight: FontWeight.w600,
+                          ),
+                          code: const TextStyle(
+                            fontFamily: 'Menlo',
+                            fontSize: 12,
+                            backgroundColor: surface,
+                          ),
+                          codeblockDecoration: BoxDecoration(
+                            color: surface,
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          blockSpacing: 14,
+                        ),
+                  ),
+                ],
+                if (turn['status'] != 'running' &&
+                    (turn['answer'] as String? ?? '').isEmpty)
+                  Text(
+                    turn['error'] as String? ??
+                        statusLabel(turn['status'] as String?),
+                    style: const TextStyle(color: muted),
+                  ),
+                if ((turn['deliverables'] as List? ?? []).isNotEmpty)
+                  _deliveryCards(turn),
+                if (turn['id'] == agent.runId) ...[
+                  const SizedBox(height: 14),
+                  Wrap(
+                    spacing: 8,
+                    children: [
+                      if (agent.report.isNotEmpty)
+                        TextButton.icon(
+                          onPressed: exportReport,
+                          icon: const Icon(Icons.download_outlined, size: 16),
+                          label: const Text('导出结果'),
+                        ),
+                      if (agent.answer.isNotEmpty)
+                        IconButton(
+                          tooltip: '复制回答',
+                          onPressed: () => Clipboard.setData(
+                            ClipboardData(text: agent.answer),
+                          ),
+                          icon: const Icon(Icons.copy_outlined, size: 16),
+                        ),
+                    ],
+                  ),
+                ],
               ],
-            ],
+            ),
           ),
-        ),
       ],
     ],
   );
@@ -1378,7 +1439,7 @@ class _WorkspacePageState extends State<WorkspacePage>
 
   Future<void> exportTrace() async {
     final location = await getSaveLocation(
-      suggestedName: 'RWKVBuddy-执行轨迹.json',
+      suggestedName: 'TECNO Buddy-执行轨迹.json',
       acceptedTypeGroups: const [
         XTypeGroup(label: '执行轨迹 JSON', extensions: ['json']),
       ],

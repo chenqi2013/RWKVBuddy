@@ -18,6 +18,35 @@ async function scratch(t) {
 }
 const command = (mode = 'local') => ({ question: '分析经营与资金情况，指出异常，给我报告', mode, workspace: join(serviceRoot, 'fixtures') });
 
+test('online capacity accepts values above three and queues requests at the configured limit', async t => {
+  const root = await scratch(t);
+  const run = new AgentRun({ ...command('rwkv'), config: { concurrency: 6 } }, root, () => {});
+  assert.equal(run.modelPool.limit, 6);
+  const release = [];
+  let started = 0;
+  const work = Array.from({ length: 8 }, () => run.modelPool.use(async () => {
+    started++;
+    await new Promise(resolve => release.push(resolve));
+  }, run.signal));
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(started, 6);
+  assert.equal(run.modelPool.queue.length, 2);
+  release.shift()();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(started, 7);
+  release.shift()();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(started, 8);
+  release.forEach(resolve => resolve());
+  await Promise.all(work);
+  assert.equal(run.modelPool.active, 0);
+  const local = new AgentRun({ ...command('rwkv'), config: { inferenceMode: 'local', concurrency: 6 } }, root, () => {});
+  assert.equal(local.modelPool.limit, 1);
+  for (const concurrency of [0, -1, 1.5, Infinity, '6', Number.MAX_SAFE_INTEGER + 1]) {
+    assert.throws(() => new AgentRun({ ...command('rwkv'), config: { concurrency } }, root, () => {}), /正整数/);
+  }
+});
+
 test('single local flow persists real reads, Lua calculations and results without synthetic role steps', async (t) => {
   const root = await scratch(t);
   const events = [];

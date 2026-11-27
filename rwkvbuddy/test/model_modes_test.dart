@@ -8,6 +8,78 @@ void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   FlutterSecureStorage.setMockInitialValues({});
 
+  testWidgets(
+    'online concurrency saves and restores a custom positive integer and rejects invalid values',
+    (tester) async {
+      tester.view.physicalSize = const Size(1000, 2000);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      final agent = AgentController(autoConnect: false);
+      addTearDown(agent.dispose);
+      await agent.saveConnection({
+        'id': 'qwen',
+        'name': '千问 · 服务器',
+        'baseUrl': 'https://example.org/v1',
+        'inferenceMode': 'online',
+        'concurrency': 8,
+      });
+      await tester.pumpWidget(
+        MaterialApp(home: ConnectionSettings(agent: agent)),
+      );
+      await tester.tap(find.byTooltip('编辑连接'));
+      await tester.pumpAndSettle();
+      Future<void> showConcurrency() async {
+        await tester.dragUntilVisible(
+          find.text('生成与并发参数'),
+          find.byType(ListView),
+          const Offset(0, -200),
+        );
+        if (find.byKey(const Key('model-concurrency')).evaluate().isEmpty) {
+          await tester.tap(find.text('生成与并发参数'));
+        }
+        await tester.pumpAndSettle();
+        await tester.ensureVisible(find.byKey(const Key('model-concurrency')));
+        await tester.pumpAndSettle();
+      }
+
+      await showConcurrency();
+      final field = find.byKey(const Key('model-concurrency'));
+      expect(tester.widget<TextField>(field).controller!.text, '8');
+      await tester.enterText(field, '6');
+      Future<void> save() async {
+        await tester.dragUntilVisible(
+          find.text('保存并使用'),
+          find.byType(ListView),
+          const Offset(0, -200),
+        );
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('保存并使用'));
+        await tester.pumpAndSettle();
+      }
+
+      await save();
+      expect(agent.config['concurrency'], 6);
+      await tester.tap(find.byTooltip('编辑连接'));
+      await tester.pumpAndSettle();
+      await showConcurrency();
+      expect(tester.widget<TextField>(field).controller!.text, '6');
+      for (final invalid in ['', '0', '-1', '1.5', 'abc', '9007199254740992']) {
+        await tester.dragUntilVisible(
+          find.text('生成与并发参数'),
+          find.byType(ListView),
+          const Offset(0, 200),
+        );
+        await showConcurrency();
+        await tester.enterText(field, invalid);
+        await save();
+        expect(agent.config['concurrency'], 6);
+        expect(find.textContaining('并发模型请求请输入有效的正整数'), findsOneWidget);
+      }
+      expect(tester.takeException(), isNull);
+    },
+  );
+
   testWidgets('local models use GGUF import without an HTTP connection form', (
     tester,
   ) async {
