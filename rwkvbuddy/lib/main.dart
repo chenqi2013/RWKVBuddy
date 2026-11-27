@@ -9,6 +9,7 @@ import 'agent_controller.dart';
 import 'connection_settings.dart';
 import 'trace_view.dart';
 import 'team_chat.dart';
+import 'team_builder.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
 
 const ink = Color(0xFF252525);
@@ -440,9 +441,15 @@ class _WorkspacePageState extends State<WorkspacePage>
           child: TextButton.icon(
             onPressed: agent.busy
                 ? null
-                : () {
+                : () async {
+                    final team = await showTeamBuilder(
+                      context,
+                      agent,
+                      create: true,
+                    );
+                    if (!mounted || team == null) return;
                     _newTask();
-                    agent.configureTeam(true, agent.team);
+                    agent.configureTeam(true, team);
                   },
             icon: const Icon(Icons.group_add_outlined, size: 18),
             label: const Text('新建群聊'),
@@ -651,7 +658,9 @@ class _WorkspacePageState extends State<WorkspacePage>
           if (agent.run != null)
             Expanded(
               child: Text(
-                agent.run!['question'] as String? ?? '文件助手',
+                agent.run!['team'] is Map
+                    ? '${agent.run!['team']['name']} · ${(agent.run!['team']['members'] as List).length + 1} 位成员'
+                    : agent.run!['question'] as String? ?? '文件助手',
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
                 style: const TextStyle(fontSize: 13, color: Color(0xFF626262)),
@@ -779,7 +788,9 @@ class _WorkspacePageState extends State<WorkspacePage>
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
                         Text(
-                          'TECNO Buddy，我帮你',
+                          agent.groupChat
+                              ? agent.team['name'] as String
+                              : 'TECNO Buddy，我帮你',
                           textAlign: TextAlign.center,
                           style: TextStyle(
                             fontSize: compact ? 27 : 32,

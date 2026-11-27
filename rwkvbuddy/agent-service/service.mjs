@@ -102,7 +102,7 @@ function processCommand(command) {
         while (parent && turns.length < 20) {
           try {
             const previous = savedRun(parent);
-            turns.unshift({ id: previous.id, question: previous.question, answer: previous.answer, report: previous.report, status: previous.status, deliverables: previous.deliverables || [], traces: previous.traces || [], events: previous.events || [], team: previous.team || null, messages: previous.messages || [] });
+            turns.unshift({ id: previous.id, question: previous.question, answer: previous.answer, report: previous.report, status: previous.status, deliverables: previous.deliverables || [], traces: previous.traces || [], events: previous.events || [], team: previous.team || null, messages: previous.messages || [], tasks: previous.tasks || {}, assignmentSummary: previous.assignmentSummary || '' });
             parent = previous.parentRunId;
           } catch { break; }
         }

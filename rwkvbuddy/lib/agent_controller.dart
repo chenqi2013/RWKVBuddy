@@ -49,6 +49,7 @@ class AgentController extends ChangeNotifier {
   bool inputsChanged = false;
   bool busy = false;
   bool groupChat = false;
+  List<Json> expertLibrary = [];
   Json team = {
     'name': '创作与研发团队',
     'members': [
@@ -71,6 +72,11 @@ class AgentController extends ChangeNotifier {
     if (busy) return;
     groupChat = enabled;
     team = value;
+    final saved = {for (final member in expertLibrary) member['id']: member};
+    for (final member in _maps(value['members'])) {
+      saved[member['id']] = member;
+    }
+    expertLibrary = saved.values.toList();
     update();
     unawaited(savePreferences());
   }
@@ -276,6 +282,11 @@ class AgentController extends ChangeNotifier {
       case 'team.updated':
         run?['team'] = payload['team'];
         run?['template'] = payload['template'];
+      case 'team.assigned':
+        run?['tasks'] = {
+          for (final task in _maps(payload['tasks'])) task['roleId']: task,
+        };
+        run?['assignmentSummary'] = payload['summary'];
       case 'message.updated':
         final message = Map<String, dynamic>.from(payload['message'] as Map);
         final messages = _maps(run?['messages']);
@@ -676,6 +687,7 @@ class AgentController extends ChangeNotifier {
           jsonDecode(await _preferences!.readAsString()) as Map,
         );
         groupChat = saved['groupChat'] == true;
+        expertLibrary = _maps(saved['expertLibrary']);
         if (saved['team'] is Map) {
           team = Map<String, dynamic>.from(saved['team'] as Map);
         }
@@ -750,6 +762,7 @@ class AgentController extends ChangeNotifier {
       'workspace': workspace,
       'groupChat': groupChat,
       'team': team,
+      'expertLibrary': expertLibrary,
       'mode': mode,
       'config': safe,
       'connections': publicProfiles,

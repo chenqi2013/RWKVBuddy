@@ -197,3 +197,109 @@ test('unreadable local files are disclosed to all experts and never replaced wit
   assert.equal(calls, 3);
   assert.equal(failed.messages.length, 0);
 });
+
+test('free speech runs expert requests concurrently at the configured capacity and waits for every result before host summary', { timeout: 10000 }, async t => {
+  let run;
+  let active = 0;
+  let peak = 0;
+  let arrived;
+  const started = new Promise(resolve => { arrived = resolve; });
+  const gates = [];
+  const calls = [];
+  const provider = async (_instruction, payload, signal) => run.modelPool.use(async () => {
+    calls.push(payload.member.id);
+    peak = Math.max(peak, ++active);
+    try {
+      if (payload.member.id === 'host') {
+        assert.equal(payload.discussion.length, 2);
+        assert.ok(run.state.messages.slice(0, 2).every(message => message.status === 'completed'));
+        return { answer: '汇总实际独立分析' };
+      }
+      assert.deepEqual(payload.discussion, []);
+      await new Promise(resolve => { gates.push(resolve); if (gates.length === 2) arrived(); });
+      return { answer: `${payload.member.name}已独立分析` };
+    } finally { active--; }
+  }, signal);
+  ({ run } = await setup(t, provider, { team: { ...team, speakingMode: 'parallel' }, config: { concurrency: 2 } }));
+  const execution = run.execute();
+  await started;
+  assert.equal(peak, 2);
+  assert.deepEqual(calls, ['plan', 'dev']);
+  assert.equal(run.state.messages.filter(message => message.status === 'running').length, 2);
+  gates[1]();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.ok(!calls.includes('host'));
+  gates[0]();
+  const state = await execution;
+  assert.equal(state.status, 'completed', state.error);
+  assert.equal(calls.at(-1), 'host');
+  assert.equal(peak, 2);
+});
+
+test('on-demand speech allocates relevant members and tasks instead of calling the whole team', async t => {
+  const calls = [];
+  const { run, events } = await setup(t, async (instruction, payload) => {
+    if (payload.members) {
+      assert.equal(payload.members.length, 2);
+      assert.match(instruction, /分配任务/);
+      calls.push('allocation');
+      return { progress: '仅需研发评估实现', assignments: [{ roleId: 'dev', task: '核对技术约束并给出实现步骤' }] };
+    }
+    calls.push(payload.member.id);
+    if (payload.member.id === 'dev') {
+      assert.match(payload.member.prompt, /核对技术约束/);
+      assert.deepEqual(payload.discussion, []);
+      return { answer: '研发的实际分析' };
+    }
+    assert.equal(payload.member.id, 'host');
+    assert.equal(payload.discussion.length, 1);
+    return { answer: '主持人按实际结果汇总' };
+  }, { team: { ...team, speakingMode: 'assigned' } });
+  const state = await run.execute();
+  assert.equal(state.status, 'completed', state.error);
+  assert.deepEqual(calls, ['allocation', 'dev', 'host']);
+  assert.deepEqual(state.messages.map(message => message.roleId), ['dev', 'host']);
+  assert.match(state.messages[0].task, /核对技术约束/);
+  assert.equal(events.filter(event => event.type === 'team.assigned').length, 1);
+  assert.equal(state.tasks.dev.task, '核对技术约束并给出实现步骤');
+});
+
+test('on-demand routing respects direct mentions and rejects invented member assignments', async t => {
+  let calls = 0;
+  const { run } = await setup(t, async (_instruction, payload) => {
+    assert.equal(payload.member.id, 'dev');
+    calls++;
+    return { answer: '仅研发回复' };
+  }, { question: '@研发 说明技术约束', team: { ...team, speakingMode: 'assigned' } });
+  assert.equal((await run.execute()).status, 'completed');
+  assert.equal(calls, 1);
+  const { run: invalid } = await setup(t, async () => ({ assignments: [{ roleId: 'invented', task: '不存在的成员' }] }), { team: { ...team, speakingMode: 'assigned' } });
+  const state = await invalid.execute();
+  assert.equal(state.status, 'failed');
+  assert.match(state.error, /成员或任务无效/);
+  assert.equal(state.messages.length, 0);
+});
+
+test('free speech keeps peer failures visible and cancellation settles all workers without starting summary', { timeout: 10000 }, async t => {
+  const { run } = await setup(t, async (_instruction, payload) => {
+    if (payload.member.id === 'dev') throw new Error('该专家连接失败');
+    if (payload.member.id === 'host') assert.equal(payload.discussion.length, 1);
+    return { answer: '可核验的分析' };
+  }, { team: { ...team, speakingMode: 'parallel' } });
+  assert.equal((await run.execute()).status, 'partial');
+  let started;
+  const ready = new Promise(resolve => { started = resolve; });
+  let count = 0;
+  const { run: cancelled } = await setup(t, async (_instruction, payload, signal) => {
+    assert.notEqual(payload.member.id, 'host');
+    if (++count === 2) started();
+    return new Promise((_resolve, reject) => signal.addEventListener('abort', () => reject(new Error('取消')), { once: true }));
+  }, { team: { ...team, speakingMode: 'parallel' } });
+  const execution = cancelled.execute();
+  await ready;
+  cancelled.cancel();
+  const state = await execution;
+  assert.equal(state.status, 'cancelled');
+  assert.deepEqual(state.messages.map(message => message.status), ['cancelled', 'cancelled']);
+  assert.ok(state.traces.every(trace => trace.status !== 'running'));
+});

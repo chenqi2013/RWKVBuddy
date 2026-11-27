@@ -7,6 +7,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:file_selector_platform_interface/file_selector_platform_interface.dart';
 import 'package:rwkvbuddy/agent_controller.dart';
 import 'package:rwkvbuddy/main.dart';
+import 'package:rwkvbuddy/team_builder.dart';
 
 class RecordingController extends AgentController {
   RecordingController() : super(autoConnect: false);
@@ -121,10 +122,7 @@ void main() {
       await tester.pumpAndSettle();
       expect(tester.takeException(), isNull);
       expect(find.text('保存团队').hitTestable(), findsOneWidget);
-      await tester.enterText(
-        find.widgetWithText(TextFormField, '创作与研发团队'),
-        '新品发布团队',
-      );
+      await tester.enterText(find.byKey(const Key('group-name')), '新品发布团队');
       await tester.tap(find.text('保存团队'));
       await tester.pumpAndSettle();
       expect(agent.team['name'], '新品发布团队');
@@ -221,4 +219,154 @@ void main() {
       expect(tester.takeException(), isNull);
     });
   }
+  testWidgets(
+    'sidebar creation supports presets, mode selection and preserves the current chat on cancel',
+    (tester) async {
+      final agent = AgentController(autoConnect: false);
+      addTearDown(agent.dispose);
+      tester.view.physicalSize = const Size(1280, 1000);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      agent.run = {
+        'id': 'existing',
+        'question': '当前本地文件分析',
+        'answer': '已有结果',
+        'status': 'completed',
+      };
+      final capture = GlobalKey();
+      await tester.pumpWidget(
+        RepaintBoundary(
+          key: capture,
+          child: MyApp(controller: agent),
+        ),
+      );
+      await tester.tap(find.text('新建群聊'));
+      await tester.pumpAndSettle();
+      expect(agent.runId, 'existing');
+      expect(find.text('自定义配置'), findsOneWidget);
+      expect(find.text('已选成员（0）'), findsOneWidget);
+      final create = find.widgetWithText(FilledButton, '创建群聊');
+      expect(tester.widget<FilledButton>(create).onPressed, isNull);
+      await tester.tap(find.text('取消'));
+      await tester.pumpAndSettle();
+      expect(agent.runId, 'existing');
+      await tester.tap(find.text('新建群聊'));
+      await tester.pumpAndSettle();
+      Future<void> screenshot(String name) async {
+        await tester.runAsync(() async {
+          final boundary =
+              capture.currentContext!.findRenderObject()!
+                  as RenderRepaintBoundary;
+          final picture = await boundary.toImage(pixelRatio: 1);
+          final bytes = await picture.toByteData(
+            format: ui.ImageByteFormat.png,
+          );
+          final output = File('build/ui-screenshots/$name.png');
+          await output.parent.create(recursive: true);
+          await output.writeAsBytes(bytes!.buffer.asUint8List());
+          picture.dispose();
+        });
+      }
+
+      await screenshot('create-group-custom');
+      await tester.tap(find.text('选择预设团队'));
+      await tester.pumpAndSettle();
+      await screenshot('create-group-presets');
+      await tester.tap(find.byKey(const Key('preset-多视角决策团队')));
+      await tester.pumpAndSettle();
+      expect(find.text('团队成员（4 人）'), findsOneWidget);
+      await screenshot('create-group-preset-detail');
+      await tester.tap(find.text('返回列表'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('preset-合同审阅团队')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('使用该团队模板'));
+      await tester.pumpAndSettle();
+      expect(find.text('已选成员（3）'), findsOneWidget);
+      expect(agent.runId, 'existing');
+      await tester.tap(find.text('创建群聊').last);
+      await tester.pumpAndSettle();
+      expect(agent.run, isNull);
+      expect(agent.groupChat, isTrue);
+      expect(agent.team['name'], '合同审阅团队');
+      expect(agent.team['speakingMode'], 'assigned');
+      expect((agent.team['members'] as List).length, 3);
+      expect(agent.expertLibrary.length, 3);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'member selection searches, adds and edits custom experts and enforces the six-member limit',
+    (tester) async {
+      tester.view.physicalSize = const Size(1200, 1000);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: ThemeData(useMaterial3: true),
+          home: Scaffold(
+            body: Builder(
+              builder: (context) => TextButton(
+                onPressed: () => showDialog<Json>(
+                  context: context,
+                  builder: (_) => const TeamBuilder(),
+                ),
+                child: const Text('打开'),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.tap(find.text('打开'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('select-reader')));
+      await tester.pumpAndSettle();
+      expect(find.text('已选成员（1）'), findsOneWidget);
+      await tester.enterText(find.byKey(const Key('expert-search')), '财务');
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('select-finance')), findsOneWidget);
+      expect(find.byKey(const Key('select-contract')), findsNothing);
+      await tester.tap(find.byKey(const Key('select-finance')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('自定义'));
+      await tester.pumpAndSettle();
+      await tester.enterText(find.byKey(const Key('expert-name')), '采购审核员');
+      await tester.enterText(
+        find.byKey(const Key('expert-prompt')),
+        '核对采购合同和预算，注明来源。',
+      );
+      await tester.ensureVisible(find.text('添加到团队'));
+      await tester.tap(find.text('添加到团队'));
+      await tester.pumpAndSettle();
+      expect(find.text('已选成员（3）'), findsOneWidget);
+      await tester.tap(find.byTooltip('编辑采购审核员'));
+      await tester.pumpAndSettle();
+      await tester.enterText(
+        find.byKey(const Key('expert-prompt')),
+        '核对金额、日期和验收条款。',
+      );
+      await tester.ensureVisible(find.text('保存专家'));
+      await tester.tap(find.text('保存专家'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byTooltip('移除资料整理员'));
+      await tester.pumpAndSettle();
+      expect(find.text('已选成员（2）'), findsOneWidget);
+      await tester.enterText(find.byKey(const Key('expert-search')), '');
+      await tester.pumpAndSettle();
+      for (final id in ['reader', 'analyst', 'reviewer', 'contract', 'risk']) {
+        final target = find.byKey(Key('select-$id'));
+        await tester.ensureVisible(target);
+        await tester.tap(target);
+        await tester.pumpAndSettle();
+      }
+      expect(find.text('已选成员（6）'), findsOneWidget);
+      expect(find.text('最多选择 6 位专家'), findsOneWidget);
+      await tester.tap(find.text('取消'));
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+    },
+  );
 }

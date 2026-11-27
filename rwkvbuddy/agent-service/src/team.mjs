@@ -12,9 +12,12 @@ export function normalizeTeam(value) {
         typeof member.prompt !== 'string' || !member.prompt.trim() || member.prompt.length > 1200) throw new Error('专家需要唯一的名称、标识和职责（名称不能含空格或 @）');
     ids.add(member.id);
     names.add(member.name.trim());
-    return { id: member.id, name: member.name.trim(), prompt: member.prompt.trim() };
+    return { id: member.id, name: member.name.trim(), prompt: member.prompt.trim(),
+      ...(['document', 'chart', 'check', 'contract', 'shield', 'idea', 'person'].includes(member.icon) ? { icon: member.icon } : {}) };
   });
-  return { name: value.name.trim(), members };
+  const speakingMode = value.speakingMode ?? 'sequential';
+  if (!['parallel', 'assigned', 'sequential'].includes(speakingMode)) throw new Error('群聊发言模式无效');
+  return { name: value.name.trim(), members, speakingMode };
 }
 
 export function teamSpeakers(team, question) {
